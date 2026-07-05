@@ -9,13 +9,16 @@ JUCE ベースの VST3 プラグイン開発モノレポ。
 - 移植対応表: [docs/PORTING.md](docs/PORTING.md)
 - アルゴリズム参照実装: [docs/reference/kemuri_generator.js](docs/reference/kemuri_generator.js)
 
-## ビルド（予定）
+## ビルド
 
 ```
 git clone --recurse-submodules https://github.com/djharuoharuo/kemuri-plugins.git
-cmake -B build -G "Visual Studio 17 2022"
+cmake -B build -G "Visual Studio 17 2022" -A x64
 cmake --build build --config Release
+ctest --test-dir build -C Release
 ```
+
+成果物: `build/plugins/KemuriBass/KemuriBass_artefacts/Release/VST3/KemuriBass.vst3`
 
 ## Status
 

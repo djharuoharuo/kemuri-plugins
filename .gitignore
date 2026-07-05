@@ -1,0 +1,29 @@
+# Build
+build/
+out/
+cmake-build-*/
+*.vst3
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# Python (tools/learning)
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# Training audio — never commit
+tools/learning/training_data/**/*.wav
+tools/learning/training_data/**/*.mp3
+tools/learning/training_data/**/*.flac
+tools/learning/training_data/**/*.m4a
+tools/learning/.pattern_cache.json
+
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -10,7 +10,7 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
 {
     setLookAndFeel (&lookAndFeel);
 
-    titleLabel.setText ("KemuriBass", juce::dontSendNotification);
+    titleLabel.setText ("kemuriBass", juce::dontSendNotification);
     titleLabel.setFont (juce::FontOptions (28.0f, juce::Font::bold));
     titleLabel.setColour (juce::Label::textColourId, ui::colours::accent);
     titleLabel.setJustificationType (juce::Justification::centred);

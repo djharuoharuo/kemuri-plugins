@@ -1,0 +1,18 @@
+[
+  {
+    "name": "period4",
+    "loopBars": 4
+  },
+  {
+    "name": "period8",
+    "loopBars": 8
+  },
+  {
+    "name": "noperiod",
+    "loopBars": 6
+  },
+  {
+    "name": "short",
+    "loopBars": 2
+  }
+]

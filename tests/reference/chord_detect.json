@@ -1,0 +1,53 @@
+[
+  {
+    "name": "C_then_Am",
+    "prog": [
+      {
+        "startBeat": 0,
+        "durationBeats": 4,
+        "root": 0,
+        "quality": "maj"
+      },
+      {
+        "startBeat": 4,
+        "durationBeats": 4,
+        "root": 9,
+        "quality": "min"
+      }
+    ]
+  },
+  {
+    "name": "G_D_half",
+    "prog": [
+      {
+        "startBeat": 0,
+        "durationBeats": 2,
+        "root": 7,
+        "quality": "maj"
+      },
+      {
+        "startBeat": 2,
+        "durationBeats": 2,
+        "root": 2,
+        "quality": "maj"
+      }
+    ]
+  },
+  {
+    "name": "Dm_then_empty",
+    "prog": [
+      {
+        "startBeat": 0,
+        "durationBeats": 4,
+        "root": 2,
+        "quality": "min"
+      },
+      {
+        "startBeat": 4,
+        "durationBeats": 4,
+        "root": 2,
+        "quality": "min"
+      }
+    ]
+  }
+]

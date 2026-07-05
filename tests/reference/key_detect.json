@@ -1,0 +1,62 @@
+[
+  {
+    "name": "C_major_scale",
+    "hist": [
+      3,
+      0,
+      1,
+      0,
+      1,
+      1,
+      0,
+      2,
+      0,
+      1,
+      0,
+      1
+    ],
+    "bestRoot": 0,
+    "bestMode": 0,
+    "bestScore": 0.9625549949635391
+  },
+  {
+    "name": "A_minor_scale",
+    "hist": [
+      1,
+      0,
+      1,
+      0,
+      2,
+      1,
+      0,
+      1,
+      0,
+      3,
+      0,
+      1
+    ],
+    "bestRoot": 9,
+    "bestMode": 1,
+    "bestScore": 0.8962214994402781
+  },
+  {
+    "name": "single_C",
+    "hist": [
+      5,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "bestRoot": 0,
+    "bestMode": 0,
+    "bestScore": 0.6844726949095995
+  }
+]

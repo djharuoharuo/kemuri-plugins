@@ -1,5 +1,5 @@
 juce_add_plugin(KemuriBass
-    COMPANY_NAME "KemuriBeat"
+    COMPANY_NAME "kemuriBeat"
     BUNDLE_ID "com.kemuribeat.kemuribass"
     IS_SYNTH TRUE
     NEEDS_MIDI_INPUT TRUE
@@ -11,7 +11,7 @@ juce_add_plugin(KemuriBass
     PLUGIN_CODE Kbas
     FORMATS VST3
     VST3_CATEGORIES "Instrument"
-    PRODUCT_NAME "KemuriBass")
+    PRODUCT_NAME "kemuriBass")
 
 target_sources(KemuriBass PRIVATE
     Source/PluginProcessor.cpp

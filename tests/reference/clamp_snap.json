@@ -1,0 +1,398 @@
+[
+  {
+    "fn": "clampBass",
+    "in": 10,
+    "anchor": 0,
+    "out": 34
+  },
+  {
+    "fn": "clampBass",
+    "in": 13,
+    "anchor": 0,
+    "out": 37
+  },
+  {
+    "fn": "clampBass",
+    "in": 16,
+    "anchor": 0,
+    "out": 28
+  },
+  {
+    "fn": "clampBass",
+    "in": 19,
+    "anchor": 0,
+    "out": 31
+  },
+  {
+    "fn": "clampBass",
+    "in": 22,
+    "anchor": 0,
+    "out": 34
+  },
+  {
+    "fn": "clampBass",
+    "in": 25,
+    "anchor": 0,
+    "out": 37
+  },
+  {
+    "fn": "clampBass",
+    "in": 28,
+    "anchor": 0,
+    "out": 28
+  },
+  {
+    "fn": "clampBass",
+    "in": 31,
+    "anchor": 0,
+    "out": 31
+  },
+  {
+    "fn": "clampBass",
+    "in": 34,
+    "anchor": 0,
+    "out": 34
+  },
+  {
+    "fn": "clampBass",
+    "in": 37,
+    "anchor": 0,
+    "out": 37
+  },
+  {
+    "fn": "clampBass",
+    "in": 40,
+    "anchor": 0,
+    "out": 40
+  },
+  {
+    "fn": "clampBass",
+    "in": 43,
+    "anchor": 0,
+    "out": 43
+  },
+  {
+    "fn": "clampBass",
+    "in": 46,
+    "anchor": 0,
+    "out": 46
+  },
+  {
+    "fn": "clampBass",
+    "in": 49,
+    "anchor": 0,
+    "out": 37
+  },
+  {
+    "fn": "clampBass",
+    "in": 52,
+    "anchor": 0,
+    "out": 40
+  },
+  {
+    "fn": "clampBass",
+    "in": 55,
+    "anchor": 0,
+    "out": 43
+  },
+  {
+    "fn": "clampBass",
+    "in": 58,
+    "anchor": 0,
+    "out": 46
+  },
+  {
+    "fn": "clampBass",
+    "in": 61,
+    "anchor": 0,
+    "out": 37
+  },
+  {
+    "fn": "clampBass",
+    "in": 64,
+    "anchor": 0,
+    "out": 40
+  },
+  {
+    "fn": "clampBass",
+    "in": 67,
+    "anchor": 0,
+    "out": 43
+  },
+  {
+    "fn": "clampBass",
+    "in": 70,
+    "anchor": 0,
+    "out": 46
+  },
+  {
+    "fn": "snapNear",
+    "in": 20,
+    "anchor": 24,
+    "out": 32
+  },
+  {
+    "fn": "snapNear",
+    "in": 25,
+    "anchor": 24,
+    "out": 37
+  },
+  {
+    "fn": "snapNear",
+    "in": 30,
+    "anchor": 24,
+    "out": 30
+  },
+  {
+    "fn": "snapNear",
+    "in": 35,
+    "anchor": 24,
+    "out": 35
+  },
+  {
+    "fn": "snapNear",
+    "in": 40,
+    "anchor": 24,
+    "out": 28
+  },
+  {
+    "fn": "snapNear",
+    "in": 45,
+    "anchor": 24,
+    "out": 33
+  },
+  {
+    "fn": "snapNear",
+    "in": 50,
+    "anchor": 24,
+    "out": 38
+  },
+  {
+    "fn": "snapNear",
+    "in": 55,
+    "anchor": 24,
+    "out": 31
+  },
+  {
+    "fn": "snapNear",
+    "in": 60,
+    "anchor": 24,
+    "out": 36
+  },
+  {
+    "fn": "snapNear",
+    "in": 20,
+    "anchor": 31,
+    "out": 32
+  },
+  {
+    "fn": "snapNear",
+    "in": 25,
+    "anchor": 31,
+    "out": 37
+  },
+  {
+    "fn": "snapNear",
+    "in": 30,
+    "anchor": 31,
+    "out": 30
+  },
+  {
+    "fn": "snapNear",
+    "in": 35,
+    "anchor": 31,
+    "out": 35
+  },
+  {
+    "fn": "snapNear",
+    "in": 40,
+    "anchor": 31,
+    "out": 28
+  },
+  {
+    "fn": "snapNear",
+    "in": 45,
+    "anchor": 31,
+    "out": 33
+  },
+  {
+    "fn": "snapNear",
+    "in": 50,
+    "anchor": 31,
+    "out": 38
+  },
+  {
+    "fn": "snapNear",
+    "in": 55,
+    "anchor": 31,
+    "out": 31
+  },
+  {
+    "fn": "snapNear",
+    "in": 60,
+    "anchor": 31,
+    "out": 36
+  },
+  {
+    "fn": "snapNear",
+    "in": 20,
+    "anchor": 36,
+    "out": 32
+  },
+  {
+    "fn": "snapNear",
+    "in": 25,
+    "anchor": 36,
+    "out": 37
+  },
+  {
+    "fn": "snapNear",
+    "in": 30,
+    "anchor": 36,
+    "out": 30
+  },
+  {
+    "fn": "snapNear",
+    "in": 35,
+    "anchor": 36,
+    "out": 35
+  },
+  {
+    "fn": "snapNear",
+    "in": 40,
+    "anchor": 36,
+    "out": 40
+  },
+  {
+    "fn": "snapNear",
+    "in": 45,
+    "anchor": 36,
+    "out": 33
+  },
+  {
+    "fn": "snapNear",
+    "in": 50,
+    "anchor": 36,
+    "out": 38
+  },
+  {
+    "fn": "snapNear",
+    "in": 55,
+    "anchor": 36,
+    "out": 31
+  },
+  {
+    "fn": "snapNear",
+    "in": 60,
+    "anchor": 36,
+    "out": 36
+  },
+  {
+    "fn": "snapNear",
+    "in": 20,
+    "anchor": 43,
+    "out": 44
+  },
+  {
+    "fn": "snapNear",
+    "in": 25,
+    "anchor": 43,
+    "out": 37
+  },
+  {
+    "fn": "snapNear",
+    "in": 30,
+    "anchor": 43,
+    "out": 42
+  },
+  {
+    "fn": "snapNear",
+    "in": 35,
+    "anchor": 43,
+    "out": 47
+  },
+  {
+    "fn": "snapNear",
+    "in": 40,
+    "anchor": 43,
+    "out": 40
+  },
+  {
+    "fn": "snapNear",
+    "in": 45,
+    "anchor": 43,
+    "out": 45
+  },
+  {
+    "fn": "snapNear",
+    "in": 50,
+    "anchor": 43,
+    "out": 38
+  },
+  {
+    "fn": "snapNear",
+    "in": 55,
+    "anchor": 43,
+    "out": 43
+  },
+  {
+    "fn": "snapNear",
+    "in": 60,
+    "anchor": 43,
+    "out": 36
+  },
+  {
+    "fn": "snapNear",
+    "in": 20,
+    "anchor": 47,
+    "out": 44
+  },
+  {
+    "fn": "snapNear",
+    "in": 25,
+    "anchor": 47,
+    "out": 37
+  },
+  {
+    "fn": "snapNear",
+    "in": 30,
+    "anchor": 47,
+    "out": 42
+  },
+  {
+    "fn": "snapNear",
+    "in": 35,
+    "anchor": 47,
+    "out": 47
+  },
+  {
+    "fn": "snapNear",
+    "in": 40,
+    "anchor": 47,
+    "out": 40
+  },
+  {
+    "fn": "snapNear",
+    "in": 45,
+    "anchor": 47,
+    "out": 45
+  },
+  {
+    "fn": "snapNear",
+    "in": 50,
+    "anchor": 47,
+    "out": 38
+  },
+  {
+    "fn": "snapNear",
+    "in": 55,
+    "anchor": 47,
+    "out": 43
+  },
+  {
+    "fn": "snapNear",
+    "in": 60,
+    "anchor": 47,
+    "out": 36
+  }
+]

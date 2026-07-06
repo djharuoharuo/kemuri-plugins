@@ -19,3 +19,25 @@ target_link_libraries(kemuri_core_tests PRIVATE
     juce::juce_recommended_warning_flags)
 
 add_test(NAME kemuri_core_tests COMMAND kemuri_core_tests)
+
+# R3: SMF エクスポート（Processor と共有する writeSequenceToSmf）の往復テスト。
+juce_add_console_app(kemuri_smf_tests
+    PRODUCT_NAME "kemuri_smf_tests")
+
+target_sources(kemuri_smf_tests PRIVATE SmfTests.cpp)
+
+target_include_directories(kemuri_smf_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/KemuriBass/Source)
+
+target_compile_definitions(kemuri_smf_tests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_STANDALONE_APPLICATION=1)
+
+target_link_libraries(kemuri_smf_tests PRIVATE
+    kemuri_core
+    juce::juce_audio_basics
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+add_test(NAME kemuri_smf_tests COMMAND kemuri_smf_tests)

@@ -24,7 +24,7 @@ ctest --test-dir build -C Release
 
 - [x] M0: リポジトリ骨格 + 空プラグイン（Live 12 読込・pluginval strictness 10 PASS）
 - [x] M1: kemuri_core 移植（G1 + G3 PASS）
-- [ ] M2: MIDI 出力 + ドラッグアウト
+- [x] M2: パラメータ公開 + ループ MIDI 出力 + ドラッグアウト（G2 PASS）
 - [ ] M3: MIDI 入力解析
 - [ ] M4: 学習パターン + UI
 

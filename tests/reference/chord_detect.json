@@ -1,6 +1,42 @@
 [
   {
     "name": "C_then_Am",
+    "notes": [
+      [
+        48,
+        0,
+        4
+      ],
+      [
+        52,
+        0,
+        4
+      ],
+      [
+        55,
+        0,
+        4
+      ],
+      [
+        45,
+        4,
+        4
+      ],
+      [
+        48,
+        4,
+        4
+      ],
+      [
+        52,
+        4,
+        4
+      ]
+    ],
+    "clipLen": 8,
+    "segBeats": 4,
+    "defaultRoot": 0,
+    "defaultMode": 0,
     "prog": [
       {
         "startBeat": 0,
@@ -18,6 +54,42 @@
   },
   {
     "name": "G_D_half",
+    "notes": [
+      [
+        43,
+        0,
+        2
+      ],
+      [
+        47,
+        0,
+        2
+      ],
+      [
+        50,
+        0,
+        2
+      ],
+      [
+        50,
+        2,
+        2
+      ],
+      [
+        54,
+        2,
+        2
+      ],
+      [
+        57,
+        2,
+        2
+      ]
+    ],
+    "clipLen": 4,
+    "segBeats": 2,
+    "defaultRoot": 0,
+    "defaultMode": 0,
     "prog": [
       {
         "startBeat": 0,
@@ -35,6 +107,27 @@
   },
   {
     "name": "Dm_then_empty",
+    "notes": [
+      [
+        50,
+        0,
+        4
+      ],
+      [
+        53,
+        0,
+        4
+      ],
+      [
+        57,
+        0,
+        4
+      ]
+    ],
+    "clipLen": 8,
+    "segBeats": 4,
+    "defaultRoot": 0,
+    "defaultMode": 0,
     "prog": [
       {
         "startBeat": 0,

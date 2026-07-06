@@ -1,7 +1,21 @@
-# kemuri_core 単体テスト (M1 で JS 参照ベクトル一致テストを追加)
-add_executable(kemuri_core_tests
-    CoreTests.cpp)
+# kemuri_core 単体テスト。
+# G3: tests/reference/*.json（JS 正本から抽出）との一致を検証する。
+# JSON パースに juce_core を使うため juce_add_console_app で構成する。
+juce_add_console_app(kemuri_core_tests
+    PRODUCT_NAME "kemuri_core_tests")
 
-target_link_libraries(kemuri_core_tests PRIVATE kemuri_core)
+target_sources(kemuri_core_tests PRIVATE CoreTests.cpp)
+
+target_compile_definitions(kemuri_core_tests PRIVATE
+    KEMURI_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/reference"
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_STANDALONE_APPLICATION=1)
+
+target_link_libraries(kemuri_core_tests PRIVATE
+    kemuri_core
+    juce::juce_core
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
 
 add_test(NAME kemuri_core_tests COMMAND kemuri_core_tests)

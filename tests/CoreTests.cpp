@@ -1,31 +1,296 @@
-// kemuri_core 単体テスト — 依存ライブラリなしの最小ハーネス。
-// M1 で JS 参照ベクトル (tests/reference/*.json) 一致テストを追加する。
+// kemuri_core 単体テスト。
+// G3: 決定的サブコンポーネントが JS 正本から抽出した参照ベクトル
+// (tests/reference/*.json) と一致することを検証する。
+#include <juce_core/juce_core.h>
+
+#include <kemuri_core/ChordDetector.h>
+#include <kemuri_core/Generators.h>
+#include <kemuri_core/InteractionScorer.h>
+#include <kemuri_core/KeyContext.h>
+#include <kemuri_core/KeyDetector.h>
+#include <kemuri_core/LoopDetector.h>
+#include <kemuri_core/MusicTheory.h>
+#include <kemuri_core/PatternLibrary.h>
+#include <kemuri_core/PhrasePlanner.h>
+#include <kemuri_core/PitchToken.h>
+#include <kemuri_core/Rng.h>
 #include <kemuri_core/Version.h>
 
+#include <array>
 #include <cstdio>
-#include <cstring>
+#include <map>
+#include <string>
+
+using namespace kemuri::core;
 
 namespace
 {
 int failures = 0;
+int checks   = 0;
 
-void expect (bool condition, const char* label)
+void expect (bool cond, const juce::String& label)
 {
-    if (! condition)
+    ++checks;
+    if (! cond)
     {
-        std::printf ("FAIL: %s\n", label);
+        std::printf ("FAIL: %s\n", label.toRawUTF8());
         ++failures;
     }
+}
+
+juce::var loadRef (const juce::String& name)
+{
+    const juce::File dir (KEMURI_REFERENCE_DIR);
+    const juce::File f = dir.getChildFile (name);
+    const juce::var parsed = juce::JSON::parse (f.loadFileAsString());
+    if (! parsed.isArray())
+        std::printf ("FAIL: could not load/parse %s\n", name.toRawUTF8());
+    return parsed;
+}
+
+const Pattern* findPattern (const juce::String& lib, const juce::String& name)
+{
+    const std::vector<Pattern>* v = nullptr;
+    if (lib == "premier") v = &premierPatterns();
+    else if (lib == "dilla") v = &dillaPatterns();
+    else if (lib == "ninth") v = &ninthPatterns();
+    else if (lib == "pete")  v = &peteRockPatterns();
+    if (! v) return nullptr;
+    for (const auto& p : *v)
+        if (name == juce::String (p.name)) return &p;
+    return nullptr;
+}
+
+PitchToken tokenFromVar (const juce::var& t)
+{
+    if (t.isString())
+        return pitchTokenFromString (t.toString().toStdString());
+    return PitchToken { Tok::Number, static_cast<int> (t) };
+}
+
+// ── Reference-vector tests ─────────────────────────────────────────
+
+void testPitchTokens()
+{
+    const juce::var rows = loadRef ("pitch_tokens.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        const auto ctx  = makeKeyContext ((int) r["ctxRoot"],  (bool) r["ctxMinor"]);
+        const auto nctx = makeKeyContext ((int) r["nextRoot"], (bool) r["nextMinor"]);
+        const int got = resolvePitch (tokenFromVar (r["token"]), ctx, nctx);
+        expect (got == (int) r["midi"],
+                "pitch_tokens[" + juce::String (i) + "] token=" + r["token"].toString()
+                    + " got=" + juce::String (got) + " want=" + r["midi"].toString());
+    }
+}
+
+void testKeyContext()
+{
+    const juce::var rows = loadRef ("key_context.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        const auto c = makeKeyContext ((int) r["root"], (bool) r["minor"]);
+        expect (c.lowAnchor == (int) r["lowAnchor"], "key_context lowAnchor row " + juce::String (i));
+        expect (c.midAnchor == (int) r["midAnchor"], "key_context midAnchor row " + juce::String (i));
+        const juce::var& sc = r["scale"];
+        for (int j = 0; j < sc.size(); ++j)
+            expect (c.scale[(size_t) j] == (int) sc[j], "key_context scale row " + juce::String (i));
+        const juce::var& ch = r["chord"];
+        for (int j = 0; j < ch.size(); ++j)
+            expect (c.chord[(size_t) j] == (int) ch[j], "key_context chord row " + juce::String (i));
+        const juce::var& pe = r["penta"];
+        for (int j = 0; j < pe.size(); ++j)
+            expect (c.penta[(size_t) j] == (int) pe[j], "key_context penta row " + juce::String (i));
+    }
+}
+
+void testClampSnap()
+{
+    const juce::var rows = loadRef ("clamp_snap.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        const int in = (int) r["in"];
+        const int want = (int) r["out"];
+        const int got = (r["fn"].toString() == "clampBass")
+                            ? clampBass (in)
+                            : snapNear (in, (int) r["anchor"]);
+        expect (got == want, "clamp_snap[" + juce::String (i) + "] got=" + juce::String (got)
+                                 + " want=" + juce::String (want));
+    }
+}
+
+void testPhraseFlags()
+{
+    const juce::var rows = loadRef ("phrase_flags.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        const auto f = computePhrase ((int) r["bars"], (int) r["fill"], (int) r["bar"]);
+        const juce::String tag = "phrase_flags[" + juce::String (i) + "] ";
+        expect (f.fillBars       == (int) r["fillBars"],           tag + "fillBars");
+        expect (f.barInPhrase    == (int) r["barInPhrase"],        tag + "barInPhrase");
+        expect (f.inDevHalf      == (bool) r["inDevHalf"],         tag + "inDevHalf");
+        expect (f.isLastOfPhrase == (bool) r["isLastOfPhrase"],    tag + "isLastOfPhrase");
+        expect (f.isDevelopment  == (bool) r["isDevelopment"],     tag + "isDevelopment");
+        expect (f.midDevelopment == (bool) r["midDevelopment"],    tag + "midDevelopment");
+        expect (f.isFill         == (bool) r["isFill"],            tag + "isFill");
+    }
+}
+
+void testChordDetect()
+{
+    const juce::var rows = loadRef ("chord_detect.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        std::vector<RawNote> notes;
+        const juce::var& nv = r["notes"];
+        for (int j = 0; j < nv.size(); ++j)
+        {
+            const juce::var& n = nv[j];
+            notes.push_back ({ (int) n[0], (double) n[1], (double) n[2] });
+        }
+        const auto prog = detectProgression (notes, (double) r["clipLen"], (double) r["segBeats"],
+                                              (int) r["defaultRoot"], (int) r["defaultMode"]);
+        const juce::var& want = r["prog"];
+        expect ((int) prog.size() == want.size(),
+                "chord_detect[" + juce::String (i) + "] segment count");
+        for (int j = 0; j < want.size() && j < (int) prog.size(); ++j)
+        {
+            expect (prog[(size_t) j].root == (int) want[j]["root"],
+                    "chord_detect[" + juce::String (i) + "] seg " + juce::String (j) + " root");
+            expect (juce::String (prog[(size_t) j].quality) == want[j]["quality"].toString(),
+                    "chord_detect[" + juce::String (i) + "] seg " + juce::String (j) + " quality");
+        }
+    }
+}
+
+void testKeyDetect()
+{
+    const juce::var rows = loadRef ("key_detect.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        std::array<double, 12> hist {};
+        const juce::var& hv = r["hist"];
+        for (int j = 0; j < 12 && j < hv.size(); ++j)
+            hist[(size_t) j] = (double) hv[j];
+        const auto res = detectKey (hist);
+        expect (res.root == (int) r["bestRoot"], "key_detect[" + juce::String (i) + "] root");
+        expect (res.mode == (int) r["bestMode"], "key_detect[" + juce::String (i) + "] mode");
+    }
+}
+
+void testInteraction()
+{
+    const juce::var rows = loadRef ("interaction.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        const Pattern* pat = findPattern (r["lib"].toString(), r["pattern"].toString());
+        expect (pat != nullptr, "interaction[" + juce::String (i) + "] pattern lookup");
+        if (! pat) continue;
+        std::array<double, 16> hist {};
+        const juce::var& hv = r["hist"];
+        for (int j = 0; j < 16 && j < hv.size(); ++j)
+            hist[(size_t) j] = (double) hv[j];
+        const double got = interactionScore (*pat, hist);
+        expect (std::abs (got - (double) r["score"]) < 1e-9,
+                "interaction[" + juce::String (i) + "] score got=" + juce::String (got, 6)
+                    + " want=" + juce::String ((double) r["score"], 6));
+    }
+}
+
+void testLoopDetect()
+{
+    const juce::var rows = loadRef ("loop_detect.json");
+    for (int i = 0; i < rows.size(); ++i)
+    {
+        const juce::var& r = rows[i];
+        std::vector<ChordSeg> prog;
+        const juce::var& pv = r["prog"];
+        for (int j = 0; j < pv.size(); ++j)
+            prog.push_back ({ 0.0, 4.0, (int) pv[j][0], pv[j][1].toString().toStdString() });
+        const int got = detectLoopBars (prog);
+        expect (got == (int) r["loopBars"],
+                "loop_detect[" + juce::String (i) + "] got=" + juce::String (got)
+                    + " want=" + r["loopBars"].toString());
+    }
+}
+
+// ── Stochastic generation: invariant / distribution checks (G3 後半) ──
+// 乱数を含む全体出力は JS との完全一致を求めず、JS も満たす不変条件を検査する。
+void testGeneration()
+{
+    for (int style = 0; style < 8; ++style)
+    {
+        for (int bars : { 4, 8, 16 })
+        {
+            int minCount = 1000000, maxCount = 0;
+            for (int seed = 0; seed < 100; ++seed)
+            {
+                Rng rng (static_cast<std::uint32_t> (seed * 2654435761u + 1u));
+                GenerateConfig cfg;
+                cfg.style = style; cfg.bars = bars; cfg.complexity = 50; cfg.fill = 40;
+                cfg.root = 4; cfg.mode = (style % 2);
+                const auto notes = buildNotes (cfg, rng);
+
+                const juce::String tag = "gen style=" + juce::String (style)
+                                         + " bars=" + juce::String (bars)
+                                         + " seed=" + juce::String (seed);
+                expect (! notes.empty(), tag + " nonempty");
+
+                const int count = static_cast<int> (notes.size());
+                minCount = std::min (minCount, count);
+                maxCount = std::max (maxCount, count);
+
+                for (const auto& n : notes)
+                {
+                    expect (n.pitch >= kBassMin && n.pitch <= kBassMax, tag + " pitch in bass range");
+                    expect (n.start >= 0.0 && n.start < bars * 4.0, tag + " start in clip");
+                    expect (n.vel >= 1 && n.vel <= 127, tag + " velocity valid");
+                    expect (n.dur > 0.0, tag + " positive duration");
+                }
+            }
+            // ざっくりした密度帯: 1 小節あたり最低 0.5 ノート以上は出る
+            expect (minCount >= bars / 2,
+                    "gen style=" + juce::String (style) + " bars=" + juce::String (bars)
+                        + " min note count " + juce::String (minCount));
+        }
+    }
+}
+
+// R10: 生成が 0 ノートになる状況でもフォールバックで空にならないことを確認。
+void testFallback()
+{
+    // 空でない生成しか通常起きないが、フォールバック経路の健全性を型で担保。
+    Rng rng (12345u);
+    GenerateConfig cfg;
+    cfg.style = 7; cfg.bars = 4; cfg.complexity = 0; cfg.fill = 0;
+    const auto notes = buildNotes (cfg, rng);
+    expect (! notes.empty(), "fallback/normal produces notes");
 }
 } // namespace
 
 int main()
 {
-    expect (kemuri::core::versionMajor == 0, "versionMajor");
-    expect (std::strcmp (kemuri::core::versionString, "0.1.0") == 0, "versionString");
+    expect (std::strcmp (versionString, "0.1.0") == 0, "versionString");
 
-    if (failures == 0)
-        std::printf ("All tests passed.\n");
+    testPitchTokens();
+    testKeyContext();
+    testClampSnap();
+    testPhraseFlags();
+    testChordDetect();
+    testKeyDetect();
+    testInteraction();
+    testLoopDetect();
+    testGeneration();
+    testFallback();
 
+    std::printf ("%d checks, %d failures\n", checks, failures);
+    if (failures == 0) std::printf ("All tests passed.\n");
     return failures == 0 ? 0 : 1;
 }

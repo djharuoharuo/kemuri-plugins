@@ -18,12 +18,18 @@ cmake --build build --config Release
 ctest --test-dir build -C Release
 ```
 
-成果物: `build/plugins/KemuriBass/KemuriBass_artefacts/Release/VST3/KemuriBass.vst3`
+成果物: `build/plugins/KemuriBass/KemuriBass_artefacts/Release/VST3/kemuriBass.vst3`
 
 ## Status
 
-- [ ] M0: リポジトリ骨格 + 空プラグイン
-- [ ] M1: kemuri_core 移植
+- [x] M0: リポジトリ骨格 + 空プラグイン（Live 12 読込・pluginval strictness 10 PASS）
+- [x] M1: kemuri_core 移植（G1 + G3 PASS）
 - [ ] M2: MIDI 出力 + ドラッグアウト
 - [ ] M3: MIDI 入力解析
 - [ ] M4: 学習パターン + UI
+
+## テスト（G3）
+
+`tools/` の Node スクリプトで JS 正本（`docs/reference/kemuri_generator.js`）から
+決定的サブコンポーネントの参照ベクトル `tests/reference/*.json` を抽出し、
+C++ 実装が一致することを ctest で検証する。乱数を含む生成全体は分布・不変条件検査。

@@ -52,7 +52,9 @@ private:
     std::unique_ptr<APVTS::SliderAttachment>   complexityAtt, fillAtt;
 
     juce::TextButton generateButton { "Generate" };
+    juce::TextButton analyzeButton  { "Analyze" };
     juce::Label      statusLabel;
+    juce::Label      analysisLabel;
     MidiDragSource   dragSource { processorRef };
 
     void setupCombo (juce::ComboBox& box, const char* paramId);

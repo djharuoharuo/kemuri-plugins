@@ -89,6 +89,20 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     };
     addAndMakeVisible (generateButton);
 
+    analyzeButton.setColour (juce::TextButton::buttonColourId, ui::colours::panel);
+    analyzeButton.setColour (juce::TextButton::textColourOffId, ui::colours::textPrimary);
+    analyzeButton.onClick = [this]
+    {
+        processorRef.requestAnalyze();
+        timerCallback();
+    };
+    addAndMakeVisible (analyzeButton);
+
+    analysisLabel.setColour (juce::Label::textColourId, ui::colours::textPrimary);
+    analysisLabel.setJustificationType (juce::Justification::centredLeft);
+    analysisLabel.setFont (juce::FontOptions (12.0f));
+    addAndMakeVisible (analysisLabel);
+
     statusLabel.setColour (juce::Label::textColourId, ui::colours::textSecondary);
     statusLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLabel);
@@ -98,7 +112,7 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     timerCallback();
     startTimerHz (10);
 
-    setSize (560, 360);
+    setSize (560, 400);
 }
 
 KemuriBassEditor::~KemuriBassEditor()
@@ -128,6 +142,7 @@ void KemuriBassEditor::timerCallback()
     statusLabel.setText (n < 0 ? "no sequence — press Generate"
                                : juce::String (n) + " notes ready",
                          juce::dontSendNotification);
+    analysisLabel.setText (processorRef.getAnalysisSummary(), juce::dontSendNotification);
 }
 
 void KemuriBassEditor::paint (juce::Graphics& g)
@@ -141,6 +156,7 @@ void KemuriBassEditor::resized()
 
     auto header = area.removeFromTop (40);
     titleLabel.setBounds (header.removeFromLeft (220));
+    analyzeButton.setBounds (header.removeFromRight (110).reduced (0, 4));
 
     area.removeFromTop (8);
 
@@ -170,6 +186,10 @@ void KemuriBassEditor::resized()
     };
     placeKnob (knobCell(), complexityLabel, complexitySlider);
     placeKnob (knobCell(), fillLabel,       fillSlider);
+
+    // 解析サマリ行
+    area.removeFromTop (8);
+    analysisLabel.setBounds (area.removeFromTop (24));
 
     // 下段: Generate / status / drag
     auto footer = area.removeFromBottom (48);

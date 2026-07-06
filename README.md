@@ -25,7 +25,7 @@ ctest --test-dir build -C Release
 - [x] M0: リポジトリ骨格 + 空プラグイン（Live 12 読込・pluginval strictness 10 PASS）
 - [x] M1: kemuri_core 移植（G1 + G3 PASS）
 - [x] M2: パラメータ公開 + ループ MIDI 出力 + ドラッグアウト（G2 PASS）
-- [ ] M3: MIDI 入力解析
+- [x] M3: MIDI 入力解析（Analyze でキー/進行/ループ検出、progression 追従）
 - [ ] M4: 学習パターン + UI
 
 ## 使い方（Ableton Live 12）
@@ -39,6 +39,14 @@ kemuriBass は VST3 **インストゥルメント**として登録される（Ab
    生成クリップがベーストラックに乗り、そのまま鳴る。
 2. **MIDI ルーティング（リアルタイム）**: kemuriBass を別トラックに置き、ベーストラックの
    `MIDI From` をそのトラック＋`kemuriBass`、`Monitor` を `In` にする。ホスト再生中に駆動。
+
+### Analyze（うわネタ解析, M3）
+
+うわネタ（コード/メロディ）の MIDI を kemuriBass に入力（別トラックから MIDI ルーティング）し、
+ホスト再生しながら `Analyze` を押すと、直近 64 小節からキー（Krumhansl-Schmuckler）・
+コード進行（1 小節 / 2 拍）・ループ長・16 分オンセット密度を検出する。以後の `Generate` は
+その進行に追従し、コール&レスポンスでうわネタの隙間を埋める。入力が無ければ「入力なし」を表示し
+手動の Key/Mode を維持する。
 
 > M4L 版のように「同一トラック内のデバイスでクリップへ直接書き込む」ことは VST3 では不可
 > （Live API はプラグインから使えない）。その用途は Max for Live 版 kemuri-bass-generator を継続利用する。

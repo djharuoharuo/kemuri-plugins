@@ -9,6 +9,7 @@
 #include <kemuri_core/KeyContext.h>
 #include <kemuri_core/KeyDetector.h>
 #include <kemuri_core/LoopDetector.h>
+#include <kemuri_core/MidiAnalyzer.h>
 #include <kemuri_core/MusicTheory.h>
 #include <kemuri_core/PatternLibrary.h>
 #include <kemuri_core/PhrasePlanner.h>
@@ -263,6 +264,43 @@ void testGeneration()
     }
 }
 
+// M3: MIDI 入力解析のオーケストレーション（R5 / R8）。
+void testAnalyze()
+{
+    // 空入力 → hasInput=false（R8）
+    expect (! analyzeNotes ({}).hasInput, "analyze empty → no input");
+
+    // C major 全音符 → A minor 全音符
+    std::vector<RawNote> notes;
+    for (int p : { 48, 52, 55 }) notes.push_back ({ p, 0.0, 4.0 });
+    for (int p : { 45, 48, 52 }) notes.push_back ({ p, 4.0, 4.0 });
+
+    const auto res = analyzeNotes (notes);
+    expect (res.hasInput, "analyze hasInput");
+    expect (res.clipBars == 2, "analyze clipBars=2");
+    expect (res.progBar.size() == 2, "analyze progBar size");
+    if (res.progBar.size() == 2)
+    {
+        expect (res.progBar[0].root == 0 && res.progBar[0].quality == "maj", "analyze prog[0]=C maj");
+        expect (res.progBar[1].root == 9 && res.progBar[1].quality == "min", "analyze prog[1]=A min");
+    }
+
+    // pairEvents: on/off ペアリングと windowStart オフセット
+    std::vector<RawEvent> ev {
+        { 100.0, 48, true }, { 100.0, 52, true },
+        { 102.0, 48, false }, { 101.0, 52, false } };
+    const auto paired = pairEvents (ev, 100.0, 104.0);
+    expect (paired.size() == 2, "pairEvents count");
+    // start は windowStart(100) 起点 → 0.0
+    bool has48 = false, has52 = false;
+    for (const auto& n : paired)
+    {
+        if (n.pitch == 48) { has48 = true; expect (std::abs (n.start - 0.0) < 1e-9 && std::abs (n.duration - 2.0) < 1e-9, "pairEvents 48 dur=2"); }
+        if (n.pitch == 52) { has52 = true; expect (std::abs (n.duration - 1.0) < 1e-9, "pairEvents 52 dur=1"); }
+    }
+    expect (has48 && has52, "pairEvents pitches present");
+}
+
 // R10: 生成が 0 ノートになる状況でもフォールバックで空にならないことを確認。
 void testFallback()
 {
@@ -289,6 +327,7 @@ int main()
     testLoopDetect();
     testGeneration();
     testFallback();
+    testAnalyze();
 
     std::printf ("%d checks, %d failures\n", checks, failures);
     if (failures == 0) std::printf ("All tests passed.\n");

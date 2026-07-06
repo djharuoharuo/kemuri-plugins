@@ -1,11 +1,14 @@
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include <kemuri_core/MidiAnalyzer.h>
 #include <kemuri_core/Rng.h>
 
 #include "MidiSequence.h"
@@ -25,7 +28,8 @@ namespace pid
 } // namespace pid
 
 // KemuriBass — Boom-Bap / Soul-Jazz ベースライン・ジェネレーター
-class KemuriBassProcessor : public juce::AudioProcessor
+class KemuriBassProcessor : public juce::AudioProcessor,
+                            private juce::Timer
 {
 public:
     KemuriBassProcessor();
@@ -56,37 +60,51 @@ public:
 
     juce::AudioProcessorValueTreeState& getApvts() { return apvts; }
 
-    // ── Generation (message thread) ─────────────────────────────────
-    // 現在のパラメータでループを生成し、オーディオスレッドへ publish する。
+    // ── Generation / Analysis (message thread) ──────────────────────
     void requestGenerate();
+    void requestAnalyze();
 
-    // 直近生成のノート数（UI 表示用、-1 = 未生成）
-    int getLastNoteCount() const { return lastNoteCount.load(); }
+    int          getLastNoteCount()   const { return lastNoteCount.load(); }
+    juce::String getAnalysisSummary() const { return analysisSummary; }
 
-    // 直近生成を SMF format 0 (PPQ 480) として指定パスへ書き出す（ドラッグアウト用）。
-    // 生成済みシーケンスが無ければ false。
     bool exportToMidiFile (const juce::File& dest);
 
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
+    void timerCallback() override;   // MIDI キャプチャのドレイン（message thread）
+    void drainCapture();
 
     juce::AudioProcessorValueTreeState apvts;
     kemuri::core::Rng                  rng;
 
-    // ── Lock-free single-producer/single-consumer sequence handoff ──
-    // メッセージスレッドが所有・解放し、オーディオスレッドは生ポインタを読むだけ。
+    // ── Lock-free sequence handoff（生成）────────────────────────────
     std::atomic<const MidiSequence*>            liveSeq { nullptr };
     std::vector<std::unique_ptr<MidiSequence>>  ownedSeqs;   // message thread only
     std::atomic<int>                            lastNoteCount { -1 };
 
-    // オーディオスレッド状態（ハングノート防止）
+    // ── Realtime MIDI capture（解析用, R5 / R11）─────────────────────
+    struct CapturedEvent { double ppq; int pitch; bool isOn; };
+    static constexpr int              kFifoCapacity = 8192;
+    juce::AbstractFifo                captureFifo { kFifoCapacity };
+    std::array<CapturedEvent, kFifoCapacity> captureBuffer {};
+    std::deque<CapturedEvent>         recentEvents;   // message thread only（直近64小節）
+    static constexpr double           kWindowBeats = 64.0 * 4.0;
+
+    // 解析結果（message thread）
+    kemuri::core::AnalysisResult analysis;
+    bool                         hasAnalysis = false;
+    juce::String                 analysisSummary { "no analysis" };
+
+    // オーディオスレッド状態
     const MidiSequence* lastRendered = nullptr;
     bool                wasPlaying   = false;
     double              sampleRate   = 44100.0;
-    double              internalPpq  = 0.0;   // PlayHead 無し時の内部クロック
+    double              internalPpq  = 0.0;
 
+    void captureIncoming (const juce::MidiBuffer& midi, double blockPpq, double beatsPerSample);
     void renderSequence (const MidiSequence& seq, juce::MidiBuffer& midi,
                          double ppqStart, double beatsPerSample, int numSamples);
+    void setChoiceParam (const char* id, int index);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KemuriBassProcessor)
 };

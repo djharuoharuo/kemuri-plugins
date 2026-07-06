@@ -29,9 +29,13 @@ KemuriBassProcessor::KemuriBassProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createLayout())
 {
+    startTimerHz (25);   // MIDI キャプチャのドレイン（message thread）
 }
 
-KemuriBassProcessor::~KemuriBassProcessor() = default;
+KemuriBassProcessor::~KemuriBassProcessor()
+{
+    stopTimer();
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout KemuriBassProcessor::createLayout()
 {
@@ -60,6 +64,7 @@ void KemuriBassProcessor::prepareToPlay (double newSampleRate, int)
     internalPpq = 0.0;
     lastRendered = nullptr;
     wasPlaying   = false;
+    captureFifo.reset();
 }
 
 void KemuriBassProcessor::releaseResources()
@@ -86,6 +91,17 @@ void KemuriBassProcessor::requestGenerate()
     cfg.root       = static_cast<int> (apvts.getRawParameterValue (pid::key)->load());
     cfg.mode       = static_cast<int> (apvts.getRawParameterValue (pid::mode)->load());
 
+    // 解析済みなら進行追従・コール&レスポンスを反映（R5）
+    if (hasAnalysis && analysis.hasInput && ! analysis.progBar.empty())
+    {
+        cfg.useProgression = true;
+        cfg.progBar        = analysis.progBar;
+        cfg.progHalfBar    = analysis.progHalfBar;
+        cfg.loopBars       = analysis.loopBars;
+        if (analysis.hasOnset)
+            cfg.onsetHist = analysis.onsetHist;
+    }
+
     auto seq = std::make_unique<MidiSequence>();
     seq->notes       = buildNotes (cfg, rng);
     seq->lengthBeats = cfg.bars * 4.0;
@@ -103,6 +119,116 @@ void KemuriBassProcessor::requestGenerate()
     // 直近 2 世代のみ保持（オーディオが読みうるのは最新 or 1 世代前まで）。
     while (ownedSeqs.size() > 2)
         ownedSeqs.erase (ownedSeqs.begin());
+}
+
+void KemuriBassProcessor::setChoiceParam (const char* id, int index)
+{
+    if (auto* p = apvts.getParameter (id))
+        p->setValueNotifyingHost (p->convertTo0to1 (static_cast<float> (index)));
+}
+
+// ── Analysis (message thread) ───────────────────────────────────────
+void KemuriBassProcessor::requestAnalyze()
+{
+    using namespace kemuri::core;
+
+    drainCapture();   // 最新のキャプチャを取り込む
+
+    if (recentEvents.empty())
+    {
+        hasAnalysis     = false;
+        analysisSummary = juce::String::fromUTF8 ("\xE5\x85\xA5\xE5\x8A\x9B\xE3\x81\xAA\xE3\x81\x97"
+                                                  " (MIDI\xE3\x82\x92 kemuriBass \xE3\x81\xB8\xE3\x83\xAB"
+                                                  "\xE3\x83\xBC\xE3\x83\x86\xE3\x82\xA3\xE3\x83\xB3\xE3\x82\xB0"
+                                                  "\xE3\x81\x97\xE3\x81\xA6\xE5\x86\x8D\xE7\x94\x9F)");
+        return;   // R8: 手動 Key/Mode を維持、例外は投げない
+    }
+
+    // 直近 64 小節ぶんのイベントを RawNote へ
+    const double windowEnd   = recentEvents.back().ppq;
+    const double windowStart = std::max (recentEvents.front().ppq, windowEnd - kWindowBeats);
+
+    std::vector<RawEvent> events;
+    events.reserve (recentEvents.size());
+    for (const auto& e : recentEvents)
+        events.push_back ({ e.ppq, e.pitch, e.isOn });
+
+    const auto notes = pairEvents (events, windowStart, windowEnd);
+    analysis    = analyzeNotes (notes);
+    hasAnalysis = analysis.hasInput;
+
+    if (! analysis.hasInput)
+    {
+        analysisSummary = juce::String::fromUTF8 ("\xE5\x85\xA5\xE5\x8A\x9B\xE3\x81\xAA\xE3\x81\x97");
+        return;
+    }
+
+    // 検出したキー/モードを UI パラメータへ反映
+    setChoiceParam (pid::key,  analysis.keyRoot);
+    setChoiceParam (pid::mode, analysis.keyMode);
+
+    // 進行サマリ
+    juce::String prog;
+    const int shown = std::min<int> (8, static_cast<int> (analysis.progBar.size()));
+    for (int i = 0; i < shown; ++i)
+    {
+        if (i > 0) prog << "-";
+        prog << kKeyNames[analysis.progBar[static_cast<size_t> (i)].root];
+        if (analysis.progBar[static_cast<size_t> (i)].quality == "min") prog << "m";
+    }
+    if (static_cast<int> (analysis.progBar.size()) > shown) prog << "...";
+
+    analysisSummary = "Key " + kKeyNames[analysis.keyRoot] + " "
+                      + (analysis.keyMode == 0 ? "Maj" : "Min")
+                      + "  |  Loop " + juce::String (analysis.loopBars) + " bars"
+                      + "  |  " + juce::String (analysis.notesPerBar, 1) + " n/bar"
+                      + "  |  " + prog;
+}
+
+// オーディオスレッドが積んだイベントを message thread の 64 小節リングへ移す。
+void KemuriBassProcessor::drainCapture()
+{
+    int start1, size1, start2, size2;
+    const int ready = captureFifo.getNumReady();
+    captureFifo.prepareToRead (ready, start1, size1, start2, size2);
+    for (int i = 0; i < size1; ++i) recentEvents.push_back (captureBuffer[static_cast<size_t> (start1 + i)]);
+    for (int i = 0; i < size2; ++i) recentEvents.push_back (captureBuffer[static_cast<size_t> (start2 + i)]);
+    captureFifo.finishedRead (size1 + size2);
+
+    if (! recentEvents.empty())
+    {
+        const double cutoff = recentEvents.back().ppq - kWindowBeats;
+        while (! recentEvents.empty() && recentEvents.front().ppq < cutoff)
+            recentEvents.pop_front();
+    }
+}
+
+void KemuriBassProcessor::timerCallback()
+{
+    drainCapture();
+}
+
+// ── Realtime MIDI capture（R11: alloc/lock/file-IO なし）─────────────
+void KemuriBassProcessor::captureIncoming (const juce::MidiBuffer& midi, double blockPpq,
+                                           double beatsPerSample)
+{
+    for (const auto meta : midi)
+    {
+        const auto msg = meta.getMessage();
+        const bool on  = msg.isNoteOn();
+        const bool off = msg.isNoteOff();
+        if (! on && ! off) continue;
+
+        const double ppq = blockPpq + meta.samplePosition * beatsPerSample;
+
+        int start1, size1, start2, size2;
+        captureFifo.prepareToWrite (1, start1, size1, start2, size2);
+        if (size1 > 0)
+            captureBuffer[static_cast<size_t> (start1)] = { ppq, msg.getNoteNumber(), on };
+        else if (size2 > 0)
+            captureBuffer[static_cast<size_t> (start2)] = { ppq, msg.getNoteNumber(), on };
+        captureFifo.finishedWrite (size1 + size2);   // 満杯なら 0（最新をドロップ）
+    }
 }
 
 // ── Realtime MIDI output ────────────────────────────────────────────
@@ -147,9 +273,6 @@ void KemuriBassProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ScopedNoDenormals noDenormals;
     buffer.clear();
 
-    // M2: 入力 MIDI は使わず（M3 で解析に回す）、生成ループを出力する。
-    midiMessages.clear();
-
     const int numSamples = buffer.getNumSamples();
     const MidiSequence* seq = liveSeq.load (std::memory_order_acquire);
 
@@ -169,6 +292,10 @@ void KemuriBassProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     }
 
     const double beatsPerSample = (bpm / 60.0) / sampleRate;
+
+    // 入力 MIDI（うわネタ）を解析用にキャプチャしてから消す（R5）
+    captureIncoming (midiMessages, ppqStart, beatsPerSample);
+    midiMessages.clear();
 
     // ハングノート防止: シーケンス差し替え / 停止遷移で all-notes-off
     const bool seqChanged  = (seq != lastRendered);

@@ -28,6 +28,21 @@ ctest --test-dir build -C Release
 - [ ] M3: MIDI 入力解析
 - [ ] M4: 学習パターン + UI
 
+## 使い方（Ableton Live 12）
+
+kemuriBass は VST3 **インストゥルメント**として登録される（Ableton はサードパーティ VST3 を
+「音源の前の MIDI エフェクト」枠に置けないため。Scaler / Cthulhu 等と同じ）。ベース音源
+（例: 自作の `sabu base.adg`）と同じトラックには挿さず、次のいずれかで使う:
+
+1. **ドラッグアウト（推奨・確実）**: kemuriBass を専用トラックに挿す → `Generate` →
+   UI の「⇩ Drag MIDI」チップをベース音源トラックの空クリップスロットへドラッグ。
+   生成クリップがベーストラックに乗り、そのまま鳴る。
+2. **MIDI ルーティング（リアルタイム）**: kemuriBass を別トラックに置き、ベーストラックの
+   `MIDI From` をそのトラック＋`kemuriBass`、`Monitor` を `In` にする。ホスト再生中に駆動。
+
+> M4L 版のように「同一トラック内のデバイスでクリップへ直接書き込む」ことは VST3 では不可
+> （Live API はプラグインから使えない）。その用途は Max for Live 版 kemuri-bass-generator を継続利用する。
+
 ## テスト（G3）
 
 `tools/` の Node スクリプトで JS 正本（`docs/reference/kemuri_generator.js`）から

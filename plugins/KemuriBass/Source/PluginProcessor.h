@@ -62,7 +62,8 @@ public:
 
     // ── Generation / Analysis (message thread) ──────────────────────
     void requestGenerate();
-    void requestAnalyze();
+    void requestAnalyze();                        // 入力キャプチャから解析
+    bool analyzeMidiFile (const juce::File& file); // ドロップした .mid から解析
 
     int          getLastNoteCount()   const { return lastNoteCount.load(); }
     juce::String getAnalysisSummary() const { return analysisSummary; }
@@ -93,7 +94,11 @@ private:
     // 解析結果（message thread）
     kemuri::core::AnalysisResult analysis;
     bool                         hasAnalysis = false;
-    juce::String                 analysisSummary { "no analysis" };
+    // 初期ヒント（うわネタ MIDI のドロップ解析を案内）
+    juce::String                 analysisSummary {
+        juce::CharPointer_UTF8 ("\xE3\x81\x86\xE3\x82\x8F\xE3\x83\x8D\xE3\x82\xBF MIDI \xE3\x82\x92"
+                                "\xE3\x81\x93\xE3\x81\x93\xE3\x81\xB8\xE3\x83\x89\xE3\x83\xAD\xE3\x83\x83"
+                                "\xE3\x83\x97\xE3\x81\xA7 Analyze") };
 
     // オーディオスレッド状態
     const MidiSequence* lastRendered = nullptr;
@@ -105,6 +110,7 @@ private:
     void renderSequence (const MidiSequence& seq, juce::MidiBuffer& midi,
                          double ppqStart, double beatsPerSample, int numSamples);
     void setChoiceParam (const char* id, int index);
+    void applyAnalysis (const std::vector<kemuri::core::RawNote>& notes, const char* sourceTag);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KemuriBassProcessor)
 };

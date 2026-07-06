@@ -128,39 +128,18 @@ void KemuriBassProcessor::setChoiceParam (const char* id, int index)
 }
 
 // ── Analysis (message thread) ───────────────────────────────────────
-void KemuriBassProcessor::requestAnalyze()
+void KemuriBassProcessor::applyAnalysis (const std::vector<kemuri::core::RawNote>& notes,
+                                         const char* sourceTag)
 {
     using namespace kemuri::core;
 
-    drainCapture();   // 最新のキャプチャを取り込む
-
-    if (recentEvents.empty())
-    {
-        hasAnalysis     = false;
-        analysisSummary = juce::String::fromUTF8 ("\xE5\x85\xA5\xE5\x8A\x9B\xE3\x81\xAA\xE3\x81\x97"
-                                                  " (MIDI\xE3\x82\x92 kemuriBass \xE3\x81\xB8\xE3\x83\xAB"
-                                                  "\xE3\x83\xBC\xE3\x83\x86\xE3\x82\xA3\xE3\x83\xB3\xE3\x82\xB0"
-                                                  "\xE3\x81\x97\xE3\x81\xA6\xE5\x86\x8D\xE7\x94\x9F)");
-        return;   // R8: 手動 Key/Mode を維持、例外は投げない
-    }
-
-    // 直近 64 小節ぶんのイベントを RawNote へ
-    const double windowEnd   = recentEvents.back().ppq;
-    const double windowStart = std::max (recentEvents.front().ppq, windowEnd - kWindowBeats);
-
-    std::vector<RawEvent> events;
-    events.reserve (recentEvents.size());
-    for (const auto& e : recentEvents)
-        events.push_back ({ e.ppq, e.pitch, e.isOn });
-
-    const auto notes = pairEvents (events, windowStart, windowEnd);
     analysis    = analyzeNotes (notes);
     hasAnalysis = analysis.hasInput;
 
     if (! analysis.hasInput)
     {
         analysisSummary = juce::String::fromUTF8 ("\xE5\x85\xA5\xE5\x8A\x9B\xE3\x81\xAA\xE3\x81\x97");
-        return;
+        return;   // R8: 手動 Key/Mode を維持、例外は投げない
     }
 
     // 検出したキー/モードを UI パラメータへ反映
@@ -178,11 +157,89 @@ void KemuriBassProcessor::requestAnalyze()
     }
     if (static_cast<int> (analysis.progBar.size()) > shown) prog << "...";
 
-    analysisSummary = "Key " + kKeyNames[analysis.keyRoot] + " "
+    analysisSummary = juce::String (sourceTag) + "Key " + kKeyNames[analysis.keyRoot] + " "
                       + (analysis.keyMode == 0 ? "Maj" : "Min")
                       + "  |  Loop " + juce::String (analysis.loopBars) + " bars"
                       + "  |  " + juce::String (analysis.notesPerBar, 1) + " n/bar"
                       + "  |  " + prog;
+}
+
+void KemuriBassProcessor::requestAnalyze()
+{
+    using namespace kemuri::core;
+
+    drainCapture();   // 最新のキャプチャを取り込む
+
+    if (recentEvents.empty())
+    {
+        hasAnalysis     = false;
+        analysisSummary = juce::String::fromUTF8 ("\xE5\x85\xA5\xE5\x8A\x9B\xE3\x81\xAA\xE3\x81\x97"
+                                                  " \xE2\x80\x94 MIDI\xE3\x82\x92\xE3\x81\x93\xE3\x81\x93"
+                                                  "\xE3\x81\xB8\xE3\x83\x89\xE3\x83\xAD\xE3\x83\x83\xE3\x83\x97"
+                                                  "\xE3\x81\x99\xE3\x82\x8B\xE3\x81\x8B\xE3\x80\x81"
+                                                  "MIDI From \xE3\x81\xA7\xE5\x85\xA5\xE5\x8A\x9B\xE3\x82\x92"
+                                                  "\xE7\xB9\x8B\xE3\x81\x84\xE3\x81\xA7\xE5\x86\x8D\xE7\x94\x9F");
+        return;
+    }
+
+    const double windowEnd   = recentEvents.back().ppq;
+    const double windowStart = std::max (recentEvents.front().ppq, windowEnd - kWindowBeats);
+
+    std::vector<RawEvent> events;
+    events.reserve (recentEvents.size());
+    for (const auto& e : recentEvents)
+        events.push_back ({ e.ppq, e.pitch, e.isOn });
+
+    applyAnalysis (pairEvents (events, windowStart, windowEnd), "");
+}
+
+// ドロップした .mid ファイルを解析（ルーティング不要）。
+bool KemuriBassProcessor::analyzeMidiFile (const juce::File& file)
+{
+    using namespace kemuri::core;
+
+    juce::FileInputStream in (file);
+    if (! in.openedOk())
+        return false;
+
+    juce::MidiFile mf;
+    if (! mf.readFrom (in))
+        return false;
+
+    double tpq = static_cast<double> (mf.getTimeFormat());   // >0 = ticks/quarter
+    if (tpq <= 0.0) tpq = 960.0;                              // SMPTE は非対応→既定値
+
+    std::vector<RawNote> notes;
+    double minStart = 1e18;
+
+    for (int t = 0; t < mf.getNumTracks(); ++t)
+    {
+        juce::MidiMessageSequence seq (*mf.getTrack (t));
+        seq.updateMatchedPairs();
+        for (int i = 0; i < seq.getNumEvents(); ++i)
+        {
+            auto* ev = seq.getEventPointer (i);
+            if (ev == nullptr || ! ev->message.isNoteOn())
+                continue;
+            const double onBeat  = ev->message.getTimeStamp() / tpq;
+            const double offBeat = (ev->noteOffObject != nullptr)
+                                       ? ev->noteOffObject->message.getTimeStamp() / tpq
+                                       : onBeat + 0.25;
+            notes.push_back ({ ev->message.getNoteNumber(), onBeat,
+                               std::max (0.05, offBeat - onBeat) });
+            minStart = std::min (minStart, onBeat);
+        }
+    }
+
+    if (notes.empty())
+        return false;
+
+    for (auto& n : notes) n.start -= minStart;   // 先頭を 0 に揃える
+    std::sort (notes.begin(), notes.end(),
+               [] (const RawNote& a, const RawNote& b) { return a.start < b.start; });
+
+    applyAnalysis (notes, "[file] ");
+    return true;
 }
 
 // オーディオスレッドが積んだイベントを message thread の 64 小節リングへ移す。

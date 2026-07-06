@@ -145,9 +145,61 @@ void KemuriBassEditor::timerCallback()
     analysisLabel.setText (processorRef.getAnalysisSummary(), juce::dontSendNotification);
 }
 
+// ── File drag-in analyze ────────────────────────────────────────────
+namespace
+{
+    bool hasMidiFile (const juce::StringArray& files)
+    {
+        for (const auto& f : files)
+            if (f.endsWithIgnoreCase (".mid") || f.endsWithIgnoreCase (".midi"))
+                return true;
+        return false;
+    }
+} // namespace
+
+bool KemuriBassEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    return hasMidiFile (files);
+}
+
+void KemuriBassEditor::fileDragEnter (const juce::StringArray& files, int, int)
+{
+    dropHighlight = hasMidiFile (files);
+    repaint();
+}
+
+void KemuriBassEditor::fileDragExit (const juce::StringArray&)
+{
+    dropHighlight = false;
+    repaint();
+}
+
+void KemuriBassEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    dropHighlight = false;
+    repaint();
+    for (const auto& f : files)
+    {
+        if (f.endsWithIgnoreCase (".mid") || f.endsWithIgnoreCase (".midi"))
+        {
+            processorRef.analyzeMidiFile (juce::File (f));
+            timerCallback();
+            break;
+        }
+    }
+}
+
 void KemuriBassEditor::paint (juce::Graphics& g)
 {
     g.fillAll (ui::colours::background);
+
+    if (dropHighlight)
+    {
+        g.setColour (ui::colours::accent);
+        g.drawRoundedRectangle (getLocalBounds().toFloat().reduced (3.0f), 8.0f, 2.5f);
+        g.setColour (ui::colours::accent.withAlpha (0.12f));
+        g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (3.0f), 8.0f);
+    }
 }
 
 void KemuriBassEditor::resized()

@@ -81,9 +81,10 @@ inline std::vector<RawNote> pairEvents (const std::vector<RawEvent>& events,
 }
 
 // ノート内容（16分スロット＋ピッチ）の繰り返しで最小ループ周期を検出する。
-// コード進行だけの detectLoopBars と違い、コードが一定でもメロディ/リズムの
-// 2 小節ループ等を拾える。候補は {1,2,4,8,16}。該当なしなら clipBars。
-inline int detectNoteLoopBars (const std::vector<RawNote>& notes, int clipBars)
+// v1.2: 完全一致でなく Dice 類似度（自己類似行列の対角線検出に相当）。
+// 多少の変奏（ゴースト1音の追加等）があっても周期を拾う。候補は {1,2,4,8,16}。
+inline int detectNoteLoopBars (const std::vector<RawNote>& notes, int clipBars,
+                               double threshold = 0.72)
 {
     if (clipBars <= 1) return std::max (1, clipBars);
 
@@ -96,16 +97,40 @@ inline int detectNoteLoopBars (const std::vector<RawNote>& notes, int clipBars)
         fp[static_cast<size_t> (b)].push_back ({ slot, n.pitch });
     }
     for (auto& v : fp)
+    {
         std::sort (v.begin(), v.end());
+        v.erase (std::unique (v.begin(), v.end()), v.end());
+    }
+
+    // Dice 係数（ソート済み集合の共通要素数から）
+    auto dice = [] (const std::vector<std::pair<int, int>>& a,
+                    const std::vector<std::pair<int, int>>& b) -> double
+    {
+        if (a.empty() && b.empty()) return 1.0;
+        if (a.empty() || b.empty()) return 0.0;
+        size_t i = 0, j = 0, common = 0;
+        while (i < a.size() && j < b.size())
+        {
+            if (a[i] == b[j])      { ++common; ++i; ++j; }
+            else if (a[i] < b[j])  ++i;
+            else                   ++j;
+        }
+        return 2.0 * static_cast<double> (common)
+               / static_cast<double> (a.size() + b.size());
+    };
 
     for (int p : { 1, 2, 4, 8, 16 })
     {
         if (p >= clipBars) continue;
-        bool match = true;
-        for (int b = p; b < clipBars && match; ++b)
-            if (fp[static_cast<size_t> (b)] != fp[static_cast<size_t> (b - p)])
-                match = false;
-        if (match) return p;
+        double sum = 0.0;
+        int    cnt = 0;
+        for (int b = p; b < clipBars; ++b)
+        {
+            sum += dice (fp[static_cast<size_t> (b)], fp[static_cast<size_t> (b - p)]);
+            ++cnt;
+        }
+        if (cnt > 0 && sum / cnt >= threshold)
+            return p;
     }
     return clipBars;
 }
@@ -119,26 +144,30 @@ inline AnalysisResult analyzeNotes (const std::vector<RawNote>& notes)
 
     r.hasInput = true;
 
-    // pitch-class ヒストグラム（ノート数カウント）＋ 最終エンド
+    // pitch-class ヒストグラム（ノート数）＋ 最終オンセット小節
+    // クリップ長はオンセット基準: 最後の発音がある小節まで。サスティンが次の小節へ
+    // 食み出しても小節数を膨らませない（「8小節ループが9小節」誤検出の根治）。
     std::array<double, 12> hist {};
-    double maxEnd = 0.0;
+    int lastOnsetBar = 0;
     for (const auto& n : notes)
     {
         hist[static_cast<size_t> (((n.pitch % 12) + 12) % 12)] += 1.0;
-        maxEnd = std::max (maxEnd, n.start + n.duration);
+        lastOnsetBar = std::max (lastOnsetBar,
+                                 static_cast<int> (std::floor (n.start / 4.0 + 1e-9)));
     }
 
-    const auto key = detectKey (hist);
+    // v1.2: Temperley-Kostka-Payne プロファイル（K-S より高精度）
+    const auto key = detectKeyTemperley (hist);
     r.keyRoot = key.root;
     r.keyMode = key.mode;
 
-    const double clipLenBeats = std::max (4.0, std::ceil (maxEnd / 4.0) * 4.0);
-    r.clipBars = std::max (1, static_cast<int> (std::llround (clipLenBeats / 4.0)));
+    r.clipBars = lastOnsetBar + 1;
+    const double clipLenBeats = r.clipBars * 4.0;
 
-    r.progBar     = detectProgression (notes, clipLenBeats, 4, r.keyRoot, r.keyMode);
-    r.progHalfBar = detectProgression (notes, clipLenBeats, 2, r.keyRoot, r.keyMode);
-    // ループ長はノート内容ベース（2 小節ループ等も検出）。コード進行が短周期なら
-    // その周期も尊重して小さい方を採る。
+    // v1.2: Viterbi 平滑化（フラッピング抑制 + キーのダイアトニック事前分布）
+    r.progBar     = detectProgressionViterbi (notes, clipLenBeats, 4, r.keyRoot, r.keyMode);
+    r.progHalfBar = detectProgressionViterbi (notes, clipLenBeats, 2, r.keyRoot, r.keyMode);
+    // ループ長はノート内容ベース（Dice 類似度）とコード周期の小さい方。
     r.loopBars    = std::min (detectNoteLoopBars (notes, r.clipBars),
                               detectLoopBars (r.progBar));
 

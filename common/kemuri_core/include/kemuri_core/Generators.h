@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <map>
 #include <optional>
 #include <string>
 #include <utility>
@@ -279,10 +280,35 @@ inline std::vector<std::pair<int, std::string>> chordAtBar (int barIdx, bool use
     return out;
 }
 
-// クリップ全体のノート列を生成する（v1.1: ループロック生成）。
-//  - Boom-Bap 系は 1 ループぶんの「型」を作って繰り返し、フレーズ端でのみ展開する
-//    （ヒップホップの基本: ループを揃え、4/8/16 の最後にターンアラウンド/クライマックス）。
-//  - ループ長 L は解析済みなら検出ループ、無ければ既定 2 小節。
+// スタイルに対応するパターンライブラリ（Boom-Bap Mix はランダムに 1 つ選ぶ）
+inline const std::vector<Pattern>& libForStyle (int style, Rng& rng)
+{
+    switch (style)
+    {
+        case 1: return premierPatterns();
+        case 2: return dillaPatterns();
+        case 3: return ninthPatterns();
+        case 4: return peteRockPatterns();
+        default:
+        {
+            const std::array<const std::vector<Pattern>*, 4> libs {
+                &premierPatterns(), &dillaPatterns(), &ninthPatterns(), &peteRockPatterns() };
+            return *libs[static_cast<size_t> (rng.next() * libs.size())];
+        }
+    }
+}
+
+// クリップ全体のノート列を生成する（v1.2: モチーフロック生成）。
+//
+// ヒップホップのループ構造（Schloss『Making Beats』のループ美学、実務の 1/2/4 小節
+// ループ）に基づく:
+//  - Boom-Bap 系は 1 ループぶんの「モチーフ（パターン）」を選んで固定する。
+//    音を固定するのではなく、コードが変わる小節では同じモチーフをそのコードで
+//    再解決する（リフをコードに追従させる）。同一ハーモニーの繰り返しは完全に同一。
+//  - 展開はフレーズ端のみ（4=bar3 turn / 8=bar7 climax / 16=bar11 mid + bar15 climax、
+//    fill はループ後半のみ）。展開も固定モチーフを基に変形する。
+//  - ループ長 L: 検出ループが 2 回以上繰り返せる（L*2 <= bars）ときだけ採用。
+//    それ以外は既定 2 小節（検出不能・過大検出で毎小節ランダムに退化しない）。
 //  - Soul-Jazz（歩くベース）はロックせず毎小節生成する。
 //  - 0 ノートならルート全音符 × Bars をフォールバック（R10）。
 inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
@@ -291,15 +317,14 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
     MarkovSelector selector;
     selector.reset();
 
-    const bool useHalfBar = (cfg.style == 5);
+    const bool useHalfBar   = (cfg.style == 5);
+    const bool lockLoop     = (cfg.style != 5);
+    const bool patternStyle = (cfg.style >= 0 && cfg.style <= 4);
     GenContext gc { selector, rng, cfg.onsetHist, cfg.groove };
 
-    const bool lockLoop = (cfg.style != 5);
-    int L = cfg.bars;
-    if (lockLoop)
-        L = (cfg.useProgression && cfg.loopBars > 0)
-                ? std::clamp (cfg.loopBars, 1, cfg.bars)
-                : std::min (cfg.bars, 2);
+    int L = std::min (cfg.bars, 2);
+    if (lockLoop && cfg.useProgression && cfg.loopBars >= 1 && cfg.loopBars * 2 <= cfg.bars)
+        L = cfg.loopBars;
     if (L < 1) L = 1;
 
     auto makeParams = [&] (int bar, bool withDev) -> BarParams
@@ -330,30 +355,55 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         return p;
     };
 
-    // ループの「型」（プレーンな L 小節）を一度だけ生成
-    std::vector<std::vector<OutNote>> cell;
-    if (lockLoop)
-    {
-        cell.resize (static_cast<size_t> (L));
+    // モチーフの固定: セル小節ごとにパターンを 1 回だけ選ぶ
+    std::vector<const Pattern*> cellPats (static_cast<size_t> (L), nullptr);
+    if (lockLoop && patternStyle)
         for (int c = 0; c < L; ++c)
-            cell[static_cast<size_t> (c)] = generateBar (cfg.style, makeParams (c, false), gc);
-    }
+            cellPats[static_cast<size_t> (c)] =
+                &selector.pickPattern (libForStyle (cfg.style, rng), nullptr, rng, cfg.onsetHist);
+
+    // 同一（セル, ハーモニー文脈）の繰り返しは同一結果を再利用する
+    std::map<std::string, std::vector<OutNote>> cache;
+    auto harmonicKey = [&] (int bar) -> std::string
+    {
+        const auto t = chordAtBar (bar,     useHalfBar, cfg);
+        const auto n = chordAtBar (bar + 1, useHalfBar, cfg);
+        std::string k = std::to_string (bar % L);
+        for (const auto& c : t) { k += "|"; k += std::to_string (c.first); k += c.second; }
+        for (const auto& c : n) { k += ">"; k += std::to_string (c.first); k += c.second; }
+        return k;
+    };
 
     for (int bar = 0; bar < cfg.bars; ++bar)
     {
         const auto f = computePhrase (cfg.bars, cfg.fill, bar);
-        // フレーズ端/セクション端のみ展開（fill は端バーの展開に含める）
-        const bool developed = f.isLastOfPhrase || f.isDevelopment || f.midDevelopment;
+        const bool developed = f.isLastOfPhrase || f.isDevelopment || f.midDevelopment || f.isFill;
 
         std::vector<OutNote> barNotes;
-        if (lockLoop && ! developed
-            && chordAtBar (bar, useHalfBar, cfg) == chordAtBar (bar % L, useHalfBar, cfg))
+        if (lockLoop && ! developed)
         {
-            barNotes = cell[static_cast<size_t> (bar % L)];   // ループを繰り返す
+            const std::string key = harmonicKey (bar);
+            const auto it = cache.find (key);
+            if (it != cache.end())
+            {
+                barNotes = it->second;   // ループの繰り返し（完全同一）
+            }
+            else
+            {
+                const auto p = makeParams (bar, false);
+                barNotes = patternStyle
+                               ? applyVariations (*cellPats[static_cast<size_t> (bar % L)], p, rng, cfg.groove)
+                               : generateBar (cfg.style, p, gc);
+                cache.emplace (key, barNotes);
+            }
         }
         else
         {
-            barNotes = generateBar (cfg.style, makeParams (bar, true), gc);
+            // 展開バー: 固定モチーフを基に変形（パターン系）/ dev フラグ付き生成（手続き系）
+            const auto p = makeParams (bar, true);
+            barNotes = (lockLoop && patternStyle)
+                           ? applyVariations (*cellPats[static_cast<size_t> (bar % L)], p, rng, cfg.groove)
+                           : generateBar (cfg.style, p, gc);
         }
 
         const double barOff = bar * 4.0;

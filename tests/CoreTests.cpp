@@ -324,6 +324,69 @@ void testNoteLoop()
     std::vector<RawNote> aperi;
     for (int b = 0; b < 4; ++b) aperi.push_back ({ 40 + b, b * 4.0, 1.0 });
     expect (detectNoteLoopBars (aperi, 4) == 4, "note loop aperiodic → clipBars");
+
+    // v1.2: 変奏耐性 — bar3 に 1 音追加されても 2 小節周期を検出（Dice 類似度）
+    std::vector<RawNote> vari;
+    auto addBar2 = [&vari] (int bar, int p1, int p2)
+    {
+        vari.push_back ({ p1, bar * 4.0 + 0.0, 1.0 });
+        vari.push_back ({ p2, bar * 4.0 + 2.0, 1.0 });
+    };
+    addBar2 (0, 40, 47); addBar2 (1, 45, 43);
+    addBar2 (2, 40, 47); addBar2 (3, 45, 43);
+    vari.push_back ({ 47, 3 * 4.0 + 0.25, 0.25 });   // bar3 だけゴースト 1 音
+    expect (detectNoteLoopBars (vari, 4) == 2, "note loop tolerates small variation");
+}
+
+// v1.2: Viterbi 平滑化コード検出。
+void testViterbi()
+{
+    // 実際のコードチェンジは検出する（stay bias が強すぎない）
+    std::vector<RawNote> cam;
+    for (int p : { 48, 52, 55 }) cam.push_back ({ p, 0.0, 4.0 });   // C maj
+    for (int p : { 45, 48, 52 }) cam.push_back ({ p, 4.0, 4.0 });   // A min
+    const auto pv = detectProgressionViterbi (cam, 8.0, 4.0, 0, 0);
+    expect (pv.size() == 2, "viterbi segment count");
+    if (pv.size() == 2)
+    {
+        expect (pv[0].root == 0 && pv[0].quality == "maj", "viterbi seg0 = C maj");
+        expect (pv[1].root == 9 && pv[1].quality == "min", "viterbi seg1 = A min");
+    }
+
+    // 曖昧セグメント（単音）はフラッピングせず前和音を維持する
+    std::vector<RawNote> gsm;
+    for (int p : { 44, 47, 51 }) gsm.push_back ({ p, 0.0, 4.0 });   // G# min triad
+    gsm.push_back ({ 44, 4.0, 4.0 });                                // G# 単音（maj/min 曖昧）
+    const auto ps = detectProgressionViterbi (gsm, 8.0, 4.0, 8, 1);
+    expect (ps.size() == 2, "viterbi stable segment count");
+    if (ps.size() == 2)
+    {
+        expect (ps[0].root == 8 && ps[0].quality == "min", "viterbi seg0 = G# min");
+        expect (ps[1].root == 8 && ps[1].quality == "min", "viterbi seg1 stays G# min");
+    }
+
+    // 空セグメントは前和音を継承する
+    std::vector<RawNote> dm;
+    for (int p : { 50, 53, 57 }) dm.push_back ({ p, 0.0, 4.0 });    // D min
+    const auto pe = detectProgressionViterbi (dm, 8.0, 4.0, 2, 1);
+    expect (pe.size() == 2 && pe[1].root == 2 && pe[1].quality == "min",
+            "viterbi empty segment inherits");
+}
+
+// v1.2: Temperley-Kostka-Payne キー検出。
+void testTemperleyKey()
+{
+    std::array<double, 12> cmaj {};
+    for (int pc : { 0, 2, 4, 5, 7, 9, 11 }) cmaj[static_cast<size_t> (pc)] = 1.0;
+    cmaj[0] += 2.0; cmaj[7] += 1.0;
+    const auto kc = detectKeyTemperley (cmaj);
+    expect (kc.root == 0 && kc.mode == 0, "TKP detects C major");
+
+    std::array<double, 12> amin {};
+    for (int pc : { 9, 11, 0, 2, 4, 5, 7 }) amin[static_cast<size_t> (pc)] = 1.0;
+    amin[9] += 2.0; amin[4] += 1.0;
+    const auto ka = detectKeyTemperley (amin);
+    expect (ka.root == 9 && ka.mode == 1, "TKP detects A minor");
 }
 
 // v1.1: ループロック生成でループが実際に繰り返すこと（Soul-Jazz 以外）。
@@ -343,11 +406,22 @@ void testLoopLock()
     {
         Rng rng (static_cast<std::uint32_t> (style + 1) * 99991u);
         GenerateConfig cfg;
-        cfg.style = style; cfg.bars = 4; cfg.complexity = 50; cfg.fill = 40; cfg.root = 0;
+        cfg.style = style; cfg.bars = 4; cfg.complexity = 50; cfg.fill = 0; cfg.root = 0;
         const auto notes = buildNotes (cfg, rng);
-        // L=2（既定）: bar0 と bar2 は同じ型（どちらも非展開）
+        // L=2（既定）: bar0 と bar2 は同じ型（どちらも非展開・同ハーモニー）
         expect (barSlice (notes, 0) == barSlice (notes, 2),
                 "loop-lock style " + juce::String (style) + " bar0==bar2");
+    }
+
+    // 8 小節: ループが複数フレーズをまたいで同一（bar0==bar2==bar4, bar1==bar5）
+    {
+        Rng rng (777777u);
+        GenerateConfig cfg;
+        cfg.style = 1; cfg.bars = 8; cfg.complexity = 50; cfg.fill = 0; cfg.root = 5;
+        const auto notes = buildNotes (cfg, rng);
+        expect (barSlice (notes, 0) == barSlice (notes, 2), "8bar lock bar0==bar2");
+        expect (barSlice (notes, 0) == barSlice (notes, 4), "8bar lock bar0==bar4");
+        expect (barSlice (notes, 1) == barSlice (notes, 5), "8bar lock bar1==bar5");
     }
 
     // Soul-Jazz はロックしない（毎小節生成 → 通常は不一致、少なくともクラッシュしない）
@@ -388,6 +462,8 @@ int main()
     testAnalyze();
     testNoteLoop();
     testLoopLock();
+    testViterbi();
+    testTemperleyKey();
 
     std::printf ("%d checks, %d failures\n", checks, failures);
     if (failures == 0) std::printf ("All tests passed.\n");

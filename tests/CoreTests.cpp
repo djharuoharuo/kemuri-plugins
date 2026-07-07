@@ -301,6 +301,64 @@ void testAnalyze()
     expect (has48 && has52, "pairEvents pitches present");
 }
 
+// v1.1: ノート内容ベースのループ検出（2 小節ループ等）。
+void testNoteLoop()
+{
+    // 4 小節で最初の 2 小節が繰り返す（bar0==bar2, bar1==bar3）
+    std::vector<RawNote> notes;
+    auto addBar = [&notes] (int bar, int p1, int p2)
+    {
+        notes.push_back ({ p1, bar * 4.0 + 0.0, 1.0 });
+        notes.push_back ({ p2, bar * 4.0 + 2.0, 1.0 });
+    };
+    addBar (0, 40, 47); addBar (1, 45, 43);
+    addBar (2, 40, 47); addBar (3, 45, 43);
+    expect (detectNoteLoopBars (notes, 4) == 2, "note loop detects 2-bar");
+
+    // 完全一致の 1 小節ループ
+    std::vector<RawNote> uni;
+    for (int b = 0; b < 4; ++b) uni.push_back ({ 40, b * 4.0, 1.0 });
+    expect (detectNoteLoopBars (uni, 4) == 1, "note loop detects 1-bar");
+
+    // 非周期
+    std::vector<RawNote> aperi;
+    for (int b = 0; b < 4; ++b) aperi.push_back ({ 40 + b, b * 4.0, 1.0 });
+    expect (detectNoteLoopBars (aperi, 4) == 4, "note loop aperiodic → clipBars");
+}
+
+// v1.1: ループロック生成でループが実際に繰り返すこと（Soul-Jazz 以外）。
+void testLoopLock()
+{
+    auto barSlice = [] (const std::vector<OutNote>& ns, int bar)
+    {
+        std::vector<std::pair<double, int>> out;
+        for (const auto& n : ns)
+            if (n.start >= bar * 4.0 - 1e-9 && n.start < (bar + 1) * 4.0 - 1e-9)
+                out.push_back ({ n.start - bar * 4.0, n.pitch });
+        std::sort (out.begin(), out.end());
+        return out;
+    };
+
+    for (int style : { 0, 1, 4, 6, 7 })   // Soul-Jazz(5) は除外
+    {
+        Rng rng (static_cast<std::uint32_t> (style + 1) * 99991u);
+        GenerateConfig cfg;
+        cfg.style = style; cfg.bars = 4; cfg.complexity = 50; cfg.fill = 40; cfg.root = 0;
+        const auto notes = buildNotes (cfg, rng);
+        // L=2（既定）: bar0 と bar2 は同じ型（どちらも非展開）
+        expect (barSlice (notes, 0) == barSlice (notes, 2),
+                "loop-lock style " + juce::String (style) + " bar0==bar2");
+    }
+
+    // Soul-Jazz はロックしない（毎小節生成 → 通常は不一致、少なくともクラッシュしない）
+    {
+        Rng rng (12321u);
+        GenerateConfig cfg; cfg.style = 5; cfg.bars = 4; cfg.complexity = 50;
+        const auto notes = buildNotes (cfg, rng);
+        expect (! notes.empty(), "soul-jazz still generates");
+    }
+}
+
 // R10: 生成が 0 ノートになる状況でもフォールバックで空にならないことを確認。
 void testFallback()
 {
@@ -328,6 +386,8 @@ int main()
     testGeneration();
     testFallback();
     testAnalyze();
+    testNoteLoop();
+    testLoopLock();
 
     std::printf ("%d checks, %d failures\n", checks, failures);
     if (failures == 0) std::printf ("All tests passed.\n");

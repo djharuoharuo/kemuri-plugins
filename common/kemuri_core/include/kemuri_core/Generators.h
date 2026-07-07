@@ -279,8 +279,12 @@ inline std::vector<std::pair<int, std::string>> chordAtBar (int barIdx, bool use
     return out;
 }
 
-// クリップ全体のノート列を生成する。正本 JS: buildNotes。
-// 展開はループ後半のみ。0 ノートならルート全音符 × Bars をフォールバック（R10）。
+// クリップ全体のノート列を生成する（v1.1: ループロック生成）。
+//  - Boom-Bap 系は 1 ループぶんの「型」を作って繰り返し、フレーズ端でのみ展開する
+//    （ヒップホップの基本: ループを揃え、4/8/16 の最後にターンアラウンド/クライマックス）。
+//  - ループ長 L は解析済みなら検出ループ、無ければ既定 2 小節。
+//  - Soul-Jazz（歩くベース）はロックせず毎小節生成する。
+//  - 0 ノートならルート全音符 × Bars をフォールバック（R10）。
 inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
 {
     std::vector<OutNote> notes;
@@ -290,28 +294,68 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
     const bool useHalfBar = (cfg.style == 5);
     GenContext gc { selector, rng, cfg.onsetHist, cfg.groove };
 
-    for (int bar = 0; bar < cfg.bars; ++bar)
+    const bool lockLoop = (cfg.style != 5);
+    int L = cfg.bars;
+    if (lockLoop)
+        L = (cfg.useProgression && cfg.loopBars > 0)
+                ? std::clamp (cfg.loopBars, 1, cfg.bars)
+                : std::min (cfg.bars, 2);
+    if (L < 1) L = 1;
+
+    auto makeParams = [&] (int bar, bool withDev) -> BarParams
     {
         const auto chordsThis = chordAtBar (bar,     useHalfBar, cfg);
         const auto chordsNext = chordAtBar (bar + 1, useHalfBar, cfg);
-
         BarParams p;
-        p.ctx     = makeKeyContext (chordsThis[0].first, chordsThis[0].second);
-        p.hasMid  = useHalfBar;
-        p.ctxMid  = useHalfBar ? makeKeyContext (chordsThis[1].first, chordsThis[1].second) : p.ctx;
-        p.nextCtx = makeKeyContext (chordsNext[0].first, chordsNext[0].second);
+        p.ctx        = makeKeyContext (chordsThis[0].first, chordsThis[0].second);
+        p.hasMid     = useHalfBar;
+        p.ctxMid     = useHalfBar ? makeKeyContext (chordsThis[1].first, chordsThis[1].second) : p.ctx;
+        p.nextCtx    = makeKeyContext (chordsNext[0].first, chordsNext[0].second);
         p.useHalfBar = useHalfBar;
         p.barIndex   = bar;
+        p.compFactor = cfg.complexity / 100.0;
+        if (withDev)
+        {
+            const auto f = computePhrase (cfg.bars, cfg.fill, bar);
+            p.barInPhrase    = f.barInPhrase;
+            p.isLastOfPhrase = f.isLastOfPhrase;
+            p.isDevelopment  = f.isDevelopment || f.midDevelopment;
+            p.isFinalClimax  = f.isDevelopment;
+            p.isFill         = f.isFill;
+        }
+        else
+        {
+            p.barInPhrase = bar % 4;   // 展開なしのプレーングルーヴ
+        }
+        return p;
+    };
 
+    // ループの「型」（プレーンな L 小節）を一度だけ生成
+    std::vector<std::vector<OutNote>> cell;
+    if (lockLoop)
+    {
+        cell.resize (static_cast<size_t> (L));
+        for (int c = 0; c < L; ++c)
+            cell[static_cast<size_t> (c)] = generateBar (cfg.style, makeParams (c, false), gc);
+    }
+
+    for (int bar = 0; bar < cfg.bars; ++bar)
+    {
         const auto f = computePhrase (cfg.bars, cfg.fill, bar);
-        p.barInPhrase    = f.barInPhrase;
-        p.isLastOfPhrase = f.isLastOfPhrase;
-        p.isDevelopment  = f.isDevelopment || f.midDevelopment;
-        p.isFinalClimax  = f.isDevelopment;
-        p.isFill         = f.isFill;
-        p.compFactor     = cfg.complexity / 100.0;
+        // フレーズ端/セクション端のみ展開（fill は端バーの展開に含める）
+        const bool developed = f.isLastOfPhrase || f.isDevelopment || f.midDevelopment;
 
-        auto barNotes = generateBar (cfg.style, p, gc);
+        std::vector<OutNote> barNotes;
+        if (lockLoop && ! developed
+            && chordAtBar (bar, useHalfBar, cfg) == chordAtBar (bar % L, useHalfBar, cfg))
+        {
+            barNotes = cell[static_cast<size_t> (bar % L)];   // ループを繰り返す
+        }
+        else
+        {
+            barNotes = generateBar (cfg.style, makeParams (bar, true), gc);
+        }
+
         const double barOff = bar * 4.0;
         for (auto& n : barNotes)
         {

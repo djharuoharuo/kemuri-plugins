@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "ChordDetector.h"
@@ -79,6 +80,36 @@ inline std::vector<RawNote> pairEvents (const std::vector<RawEvent>& events,
     return notes;
 }
 
+// ノート内容（16分スロット＋ピッチ）の繰り返しで最小ループ周期を検出する。
+// コード進行だけの detectLoopBars と違い、コードが一定でもメロディ/リズムの
+// 2 小節ループ等を拾える。候補は {1,2,4,8,16}。該当なしなら clipBars。
+inline int detectNoteLoopBars (const std::vector<RawNote>& notes, int clipBars)
+{
+    if (clipBars <= 1) return std::max (1, clipBars);
+
+    std::vector<std::vector<std::pair<int, int>>> fp (static_cast<size_t> (clipBars));
+    for (const auto& n : notes)
+    {
+        const int b = static_cast<int> (std::floor (n.start / 4.0 + 1e-9));
+        if (b < 0 || b >= clipBars) continue;
+        const int slot = static_cast<int> (std::lround ((n.start - b * 4.0) / 0.25));
+        fp[static_cast<size_t> (b)].push_back ({ slot, n.pitch });
+    }
+    for (auto& v : fp)
+        std::sort (v.begin(), v.end());
+
+    for (int p : { 1, 2, 4, 8, 16 })
+    {
+        if (p >= clipBars) continue;
+        bool match = true;
+        for (int b = p; b < clipBars && match; ++b)
+            if (fp[static_cast<size_t> (b)] != fp[static_cast<size_t> (b - p)])
+                match = false;
+        if (match) return p;
+    }
+    return clipBars;
+}
+
 // アライン済みノート列（start は 0 起点）を解析する。
 inline AnalysisResult analyzeNotes (const std::vector<RawNote>& notes)
 {
@@ -106,7 +137,10 @@ inline AnalysisResult analyzeNotes (const std::vector<RawNote>& notes)
 
     r.progBar     = detectProgression (notes, clipLenBeats, 4, r.keyRoot, r.keyMode);
     r.progHalfBar = detectProgression (notes, clipLenBeats, 2, r.keyRoot, r.keyMode);
-    r.loopBars    = detectLoopBars (r.progBar);
+    // ループ長はノート内容ベース（2 小節ループ等も検出）。コード進行が短周期なら
+    // その周期も尊重して小さい方を採る。
+    r.loopBars    = std::min (detectNoteLoopBars (notes, r.clipBars),
+                              detectLoopBars (r.progBar));
 
     // 16 分オンセットヒストグラム（1 小節に畳み込み、max で正規化）
     std::array<double, 16> h {};

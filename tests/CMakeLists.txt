@@ -52,6 +52,7 @@ target_include_directories(kemuri_patterns_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/KemuriBass/Source)
 
 target_compile_definitions(kemuri_patterns_tests PRIVATE
+    KEMURI_SAMPLE_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../docs/patterns.sample.json"
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
     JUCE_STANDALONE_APPLICATION=1)

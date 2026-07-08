@@ -92,6 +92,31 @@ int main()
         f.deleteFile();
     }
 
+    // コミット済みサンプル（docs/patterns.sample.json）が読めること
+#ifdef KEMURI_SAMPLE_JSON
+    {
+        PatternBank bank = makeDefaultBank();
+        const auto r = mergePatternsJson (bank, juce::File (KEMURI_SAMPLE_JSON));
+        expect (r.present && r.ok, "committed sample parses ok");
+        expect (r.added > 0, "committed sample adds patterns");
+    }
+#endif
+
+    // Python 学習パイプライン出力との相互検証（環境変数で渡された場合のみ）
+    {
+        const juce::String extra =
+            juce::SystemStats::getEnvironmentVariable ("KEMURI_EXTRA_PATTERNS", {});
+        const juce::File f (extra);
+        if (extra.isNotEmpty() && f.existsAsFile())
+        {
+            PatternBank bank = makeDefaultBank();
+            const auto r = mergePatternsJson (bank, f);
+            expect (r.present && r.ok, "python-generated patterns.json parses ok");
+            expect (r.added > 0, "python-generated adds patterns");
+            std::printf ("cross-check: loaded %d patterns from python output\n", r.added);
+        }
+    }
+
     std::printf (failures == 0 ? "Patterns tests passed.\n" : "%d patterns failures\n", failures);
     return failures == 0 ? 0 : 1;
 }

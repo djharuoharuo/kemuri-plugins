@@ -1,0 +1,7 @@
+# WAV → ベースパターン学習パイプライン（learn_patterns.py）の依存。
+# basic-pitch は Python 3.11 までを公式サポート（3.12+ は要動作確認）。
+# Demucs は torch を内部利用。初回に約 300MB のモデルを自動 DL（CPU 可）。
+demucs>=4.0.0
+basic-pitch>=0.4.0
+pretty_midi>=0.2.10
+numpy>=1.24.0

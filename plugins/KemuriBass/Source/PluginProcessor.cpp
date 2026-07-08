@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "PatternsJson.h"
 #include "SmfExport.h"
 
 #include <algorithm>
@@ -29,7 +30,32 @@ KemuriBassProcessor::KemuriBassProcessor()
                           .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createLayout())
 {
+    loadPatternBank();   // R6/R9: patterns.json をハードコードへマージ
     startTimerHz (25);   // MIDI キャプチャのドレイン（message thread）
+}
+
+void KemuriBassProcessor::loadPatternBank()
+{
+    bank = kemuri::core::makeDefaultBank();
+    const auto res = mergePatternsJson (bank, patternsJsonFile());
+
+    if (! res.present)
+    {
+        bankStatus  = "patterns: built-in only";
+        bankWarning = false;
+    }
+    else if (! res.ok)
+    {
+        // R9: パース失敗 → ハードコードのみ（bank は既定に戻す）+ 警告
+        bank        = kemuri::core::makeDefaultBank();
+        bankStatus  = "patterns.json parse failed — using built-in only";
+        bankWarning = true;
+    }
+    else
+    {
+        bankStatus  = "patterns.json: +" + juce::String (res.added) + " learned";
+        bankWarning = false;
+    }
 }
 
 KemuriBassProcessor::~KemuriBassProcessor()
@@ -90,6 +116,7 @@ void KemuriBassProcessor::requestGenerate()
         static_cast<int> (apvts.getRawParameterValue (pid::bars)->load()), 0, 2)];
     cfg.root       = static_cast<int> (apvts.getRawParameterValue (pid::key)->load());
     cfg.mode       = static_cast<int> (apvts.getRawParameterValue (pid::mode)->load());
+    cfg.bank       = &bank;   // 学習パターン束（R6）
 
     // 解析済みなら進行追従・コール&レスポンスを反映（R5）
     if (hasAnalysis && analysis.hasInput && ! analysis.progBar.empty())
@@ -372,6 +399,21 @@ void KemuriBassProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     lastRendered = seq;
     wasPlaying   = isPlaying;
+}
+
+// ── Preview snapshot (UI, message thread) ───────────────────────────
+std::vector<kemuri::core::OutNote> KemuriBassProcessor::getPreviewNotes() const
+{
+    if (const MidiSequence* seq = liveSeq.load (std::memory_order_acquire))
+        return seq->notes;
+    return {};
+}
+
+double KemuriBassProcessor::getPreviewLengthBeats() const
+{
+    if (const MidiSequence* seq = liveSeq.load (std::memory_order_acquire))
+        return seq->lengthBeats;
+    return 0.0;
 }
 
 // ── SMF export (R3) ─────────────────────────────────────────────────

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "libraries": {
+    "premier": {
+      "patterns": [
+        {
+          "name": "LRN_premier_pump",
+          "swing": 0,
+          "jitter": 0,
+          "notes": [
+            { "pos": 0,   "dur": 0.5,  "pitch": "0" },
+            { "pos": 1.5, "dur": 0.5,  "pitch": "0" },
+            { "pos": 2.5, "dur": 0.4,  "pitch": "b7" },
+            { "pos": 3,   "dur": 0.75, "pitch": "0" }
+          ]
+        }
+      ],
+      "transitions": {
+        "LRN_premier_pump": { "PRM_mass_appeal": 2, "PRM_b7_stab": 3 }
+      },
+      "groove": {
+        "timing": [
+          [0.0, 0.01], null, [0.03, 0.02], null,
+          [0.0, 0.01], null, [0.03, 0.02], null,
+          [0.0, 0.01], null, [0.03, 0.02], null,
+          [0.0, 0.01], null, [0.03, 0.02], null
+        ]
+      }
+    },
+    "dilla": { "patterns": [] },
+    "ninth": { "patterns": [] },
+    "pete":  { "patterns": [] },
+    "pool":  {
+      "patterns": [
+        {
+          "name": "LRN_pool_sub",
+          "jitter": 0.05,
+          "notes": [
+            { "pos": 0,   "dur": 1.5, "pitch": "0" },
+            { "pos": 2,   "dur": 0.5, "pitch": "octave" },
+            { "pos": 2.5, "dur": 1.0, "pitch": "0" }
+          ]
+        }
+      ]
+    }
+  }
+}

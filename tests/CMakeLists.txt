@@ -41,3 +41,25 @@ target_link_libraries(kemuri_smf_tests PRIVATE
     juce::juce_recommended_warning_flags)
 
 add_test(NAME kemuri_smf_tests COMMAND kemuri_smf_tests)
+
+# R6/R9: patterns.json ロード・マージ（Processor と共有する PatternsJson.h）。
+juce_add_console_app(kemuri_patterns_tests
+    PRODUCT_NAME "kemuri_patterns_tests")
+
+target_sources(kemuri_patterns_tests PRIVATE PatternsTests.cpp)
+
+target_include_directories(kemuri_patterns_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/KemuriBass/Source)
+
+target_compile_definitions(kemuri_patterns_tests PRIVATE
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_STANDALONE_APPLICATION=1)
+
+target_link_libraries(kemuri_patterns_tests PRIVATE
+    kemuri_core
+    juce::juce_core
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+add_test(NAME kemuri_patterns_tests COMMAND kemuri_patterns_tests)

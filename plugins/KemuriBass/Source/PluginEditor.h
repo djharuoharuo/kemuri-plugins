@@ -24,6 +24,18 @@ private:
     bool dragging = false;
 };
 
+// 生成結果のピアノロールプレビュー（M4 UI 仕上げ）。
+class PianoRollPreview : public juce::Component
+{
+public:
+    void setSequence (std::vector<kemuri::core::OutNote> notes, double lengthBeats);
+    void paint (juce::Graphics&) override;
+
+private:
+    std::vector<kemuri::core::OutNote> notes;
+    double lengthBeats = 0.0;
+};
+
 class KemuriBassEditor : public juce::AudioProcessorEditor,
                          public  juce::FileDragAndDropTarget,
                          private juce::Timer
@@ -63,6 +75,8 @@ private:
     juce::TextButton analyzeButton  { "Analyze" };
     juce::Label      statusLabel;
     juce::Label      analysisLabel;
+    juce::Label      bankLabel;
+    PianoRollPreview preview;
     MidiDragSource   dragSource { processorRef };
 
     void setupCombo (juce::ComboBox& box, const char* paramId);

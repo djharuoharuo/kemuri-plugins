@@ -12,6 +12,7 @@
 #include "MarkovSelector.h"
 #include "MusicTheory.h"
 #include "Pattern.h"
+#include "PatternBank.h"
 #include "PatternLibrary.h"
 #include "PhrasePlanner.h"
 #include "Rng.h"
@@ -38,8 +39,34 @@ struct GenerateConfig
     int                   loopBars = 0;
 
     std::optional<std::array<double, 16>> onsetHist;   // topline call & response
-    const LearnedGroove*                  groove = nullptr;
+    const PatternBank*                    bank = nullptr;   // 学習パターン束（null=既定）
 };
+
+// cfg.bank が null のときのハードコード既定束。
+inline const PatternBank& defaultBank()
+{
+    static const PatternBank bank = makeDefaultBank();
+    return bank;
+}
+
+// スタイルに対応するプロデューサ束を返す（Boom-Bap Mix はランダムに 1 つ）。
+inline const ProducerLib& producerForStyle (const PatternBank& bank, int style, Rng& rng)
+{
+    switch (style)
+    {
+        case 1:  return bank.premier;
+        case 2:  return bank.dilla;
+        case 3:  return bank.ninth;
+        case 4:  return bank.pete;
+        default:
+        {
+            const std::array<const ProducerLib*, 5> libs {
+                &bank.premier, &bank.dilla, &bank.ninth, &bank.pete, &bank.pool };
+            const int n = bank.pool.patterns.empty() ? 4 : 5;
+            return *libs[static_cast<size_t> (rng.next() * n)];
+        }
+    }
+}
 
 // 生成の可変状態（選択器・乱数・解析文脈）をまとめて渡す。
 struct GenContext
@@ -280,24 +307,6 @@ inline std::vector<std::pair<int, std::string>> chordAtBar (int barIdx, bool use
     return out;
 }
 
-// スタイルに対応するパターンライブラリ（Boom-Bap Mix はランダムに 1 つ選ぶ）
-inline const std::vector<Pattern>& libForStyle (int style, Rng& rng)
-{
-    switch (style)
-    {
-        case 1: return premierPatterns();
-        case 2: return dillaPatterns();
-        case 3: return ninthPatterns();
-        case 4: return peteRockPatterns();
-        default:
-        {
-            const std::array<const std::vector<Pattern>*, 4> libs {
-                &premierPatterns(), &dillaPatterns(), &ninthPatterns(), &peteRockPatterns() };
-            return *libs[static_cast<size_t> (rng.next() * libs.size())];
-        }
-    }
-}
-
 // クリップ全体のノート列を生成する（v1.2: モチーフロック生成）。
 //
 // ヒップホップのループ構造（Schloss『Making Beats』のループ美学、実務の 1/2/4 小節
@@ -320,7 +329,8 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
     const bool useHalfBar   = (cfg.style == 5);
     const bool lockLoop     = (cfg.style != 5);
     const bool patternStyle = (cfg.style >= 0 && cfg.style <= 4);
-    GenContext gc { selector, rng, cfg.onsetHist, cfg.groove };
+    GenContext gc { selector, rng, cfg.onsetHist, nullptr };
+    const PatternBank& bank = (cfg.bank != nullptr) ? *cfg.bank : defaultBank();
 
     int L = std::min (cfg.bars, 2);
     if (lockLoop && cfg.useProgression && cfg.loopBars >= 1 && cfg.loopBars * 2 <= cfg.bars)
@@ -355,12 +365,18 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         return p;
     };
 
-    // モチーフの固定: セル小節ごとにパターンを 1 回だけ選ぶ
-    std::vector<const Pattern*> cellPats (static_cast<size_t> (L), nullptr);
+    // モチーフの固定: セル小節ごとにプロデューサ束からパターンを 1 回だけ選ぶ。
+    // 学習遷移（Markov）があればそれで、無ければ一様ランダム。groove は束ごと。
+    struct Motif { const Pattern* pat = nullptr; const ProducerLib* lib = nullptr; };
+    std::vector<Motif> cellMotifs (static_cast<size_t> (L));
     if (lockLoop && patternStyle)
         for (int c = 0; c < L; ++c)
-            cellPats[static_cast<size_t> (c)] =
-                &selector.pickPattern (libForStyle (cfg.style, rng), nullptr, rng, cfg.onsetHist);
+        {
+            const ProducerLib& pl = producerForStyle (bank, cfg.style, rng);
+            const Transitions* tr = pl.transitions.empty() ? nullptr : &pl.transitions;
+            cellMotifs[static_cast<size_t> (c)] =
+                { &selector.pickPattern (pl.patterns, tr, rng, cfg.onsetHist), &pl };
+        }
 
     // 同一（セル, ハーモニー文脈）の繰り返しは同一結果を再利用する
     std::map<std::string, std::vector<OutNote>> cache;
@@ -379,6 +395,14 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         const auto f = computePhrase (cfg.bars, cfg.fill, bar);
         const bool developed = f.isLastOfPhrase || f.isDevelopment || f.midDevelopment || f.isFill;
 
+        auto motifBar = [&] (int b, bool withDev) -> std::vector<OutNote>
+        {
+            const Motif& m  = cellMotifs[static_cast<size_t> (b % L)];
+            const auto   p  = makeParams (b, withDev);
+            const LearnedGroove* gr = (m.lib != nullptr && m.lib->hasGroove) ? &m.lib->groove : nullptr;
+            return applyVariations (*m.pat, p, rng, gr);
+        };
+
         std::vector<OutNote> barNotes;
         if (lockLoop && ! developed)
         {
@@ -390,20 +414,16 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
             }
             else
             {
-                const auto p = makeParams (bar, false);
-                barNotes = patternStyle
-                               ? applyVariations (*cellPats[static_cast<size_t> (bar % L)], p, rng, cfg.groove)
-                               : generateBar (cfg.style, p, gc);
+                barNotes = patternStyle ? motifBar (bar, false)
+                                        : generateBar (cfg.style, makeParams (bar, false), gc);
                 cache.emplace (key, barNotes);
             }
         }
         else
         {
             // 展開バー: 固定モチーフを基に変形（パターン系）/ dev フラグ付き生成（手続き系）
-            const auto p = makeParams (bar, true);
-            barNotes = (lockLoop && patternStyle)
-                           ? applyVariations (*cellPats[static_cast<size_t> (bar % L)], p, rng, cfg.groove)
-                           : generateBar (cfg.style, p, gc);
+            barNotes = (lockLoop && patternStyle) ? motifBar (bar, true)
+                                                  : generateBar (cfg.style, makeParams (bar, true), gc);
         }
 
         const double barOff = bar * 4.0;

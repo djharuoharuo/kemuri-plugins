@@ -1,5 +1,9 @@
 #include "PluginEditor.h"
 
+#include <cmath>
+#include <utility>
+
+#include <kemuri_core/MusicTheory.h>
 #include <kemuri_core/Version.h>
 
 namespace kemuri
@@ -35,6 +39,54 @@ void MidiDragSource::mouseDrag (const juce::MouseEvent&)
     juce::DragAndDropContainer::performExternalDragDropOfFiles (
         { tmp.getFullPathName() }, /*canMoveFiles*/ false, this,
         [this] { dragging = false; });
+}
+
+// ── PianoRollPreview ────────────────────────────────────────────────
+void PianoRollPreview::setSequence (std::vector<kemuri::core::OutNote> n, double len)
+{
+    notes       = std::move (n);
+    lengthBeats = len;
+    repaint();
+}
+
+void PianoRollPreview::paint (juce::Graphics& g)
+{
+    auto b = getLocalBounds().toFloat();
+    g.setColour (ui::colours::panel);
+    g.fillRoundedRectangle (b, 5.0f);
+
+    if (notes.empty() || lengthBeats <= 0.0)
+    {
+        g.setColour (ui::colours::textSecondary);
+        g.setFont (juce::FontOptions (12.0f));
+        g.drawText ("preview", getLocalBounds(), juce::Justification::centred);
+        return;
+    }
+
+    // 小節グリッド（4 beats ごと）
+    const int bars = juce::jmax (1, static_cast<int> (std::lround (lengthBeats / 4.0)));
+    g.setColour (ui::colours::background.withAlpha (0.6f));
+    for (int bar = 1; bar < bars; ++bar)
+    {
+        const float x = b.getX() + b.getWidth() * (bar * 4.0f / (float) lengthBeats);
+        g.drawVerticalLine (static_cast<int> (x), b.getY(), b.getBottom());
+    }
+
+    // ベース音域（28-47）を縦にマップ
+    constexpr int lo = kemuri::core::kBassMin;
+    constexpr int hi = kemuri::core::kBassMax;
+    const float pad  = 4.0f;
+    const float rowH = (b.getHeight() - 2 * pad) / static_cast<float> (hi - lo + 1);
+
+    for (const auto& n : notes)
+    {
+        const float x = b.getX() + b.getWidth() * (float) (n.start / lengthBeats);
+        const float w = juce::jmax (2.0f, b.getWidth() * (float) (n.dur / lengthBeats) - 1.0f);
+        const int   pc = juce::jlimit (lo, hi, n.pitch);
+        const float y  = b.getBottom() - pad - (pc - lo + 1) * rowH;
+        g.setColour (ui::colours::accent);
+        g.fillRoundedRectangle (x + 0.5f, y, w, juce::jmax (2.0f, rowH - 1.0f), 2.0f);
+    }
 }
 
 // ── Editor ──────────────────────────────────────────────────────────
@@ -103,6 +155,12 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     analysisLabel.setFont (juce::FontOptions (12.0f));
     addAndMakeVisible (analysisLabel);
 
+    bankLabel.setJustificationType (juce::Justification::centredLeft);
+    bankLabel.setFont (juce::FontOptions (11.0f));
+    addAndMakeVisible (bankLabel);
+
+    addAndMakeVisible (preview);
+
     statusLabel.setColour (juce::Label::textColourId, ui::colours::textSecondary);
     statusLabel.setJustificationType (juce::Justification::centredRight);
     addAndMakeVisible (statusLabel);
@@ -112,7 +170,7 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     timerCallback();
     startTimerHz (10);
 
-    setSize (560, 400);
+    setSize (560, 500);
 }
 
 KemuriBassEditor::~KemuriBassEditor()
@@ -143,6 +201,13 @@ void KemuriBassEditor::timerCallback()
                                : juce::String (n) + " notes ready",
                          juce::dontSendNotification);
     analysisLabel.setText (processorRef.getAnalysisSummary(), juce::dontSendNotification);
+
+    bankLabel.setText (processorRef.getBankStatus(), juce::dontSendNotification);
+    bankLabel.setColour (juce::Label::textColourId,
+                         processorRef.hasBankWarning() ? juce::Colour (0xffd08a3d)
+                                                       : ui::colours::textSecondary);
+
+    preview.setSequence (processorRef.getPreviewNotes(), processorRef.getPreviewLengthBeats());
 }
 
 // ── File drag-in analyze ────────────────────────────────────────────
@@ -239,9 +304,14 @@ void KemuriBassEditor::resized()
     placeKnob (knobCell(), complexityLabel, complexitySlider);
     placeKnob (knobCell(), fillLabel,       fillSlider);
 
-    // 解析サマリ行
+    // 解析サマリ + 学習パターン状態
     area.removeFromTop (8);
-    analysisLabel.setBounds (area.removeFromTop (24));
+    analysisLabel.setBounds (area.removeFromTop (20));
+    bankLabel.setBounds (area.removeFromTop (16));
+
+    // ピアノロールプレビュー
+    area.removeFromTop (6);
+    preview.setBounds (area.removeFromTop (100));
 
     // 下段: Generate / status / drag
     auto footer = area.removeFromBottom (48);

@@ -26,7 +26,7 @@ ctest --test-dir build -C Release
 - [x] M1: kemuri_core 移植（G1 + G3 PASS）
 - [x] M2: パラメータ公開 + ループ MIDI 出力 + ドラッグアウト（G2 PASS）
 - [x] M3: MIDI 入力解析（Analyze でキー/進行/ループ検出、progression 追従）
-- [ ] M4: 学習パターン + UI
+- [x] M4: 学習パターン (patterns.json) + UI 仕上げ（ピアノロールプレビュー）
 
 ## 使い方（Ableton Live 12）
 
@@ -54,6 +54,15 @@ kemuriBass は VST3 **インストゥルメント**として登録される（Ab
 > VST3 はホストの他トラック/クリップを直接読めない（Live API はプラグインから使えない）ため、
 > M4L 版のような「ソーストラックを選んで読む」方式は不可。上記のドロップ or 入力で渡す。
 > 入力が無ければ「入力なし」を表示し、手動 Key/Mode を維持する（R8）。
+
+### 学習パターン（patterns.json, M4）
+
+`%APPDATA%/KemuriBeat/patterns.json` を置くと、起動時にハードコードのパターンライブラリへ
+マージされる（R6）。プロデューサ別のパターン・Markov 遷移・学習グルーヴを追加でき、生成が
+実曲寄りになる。スキーマは [docs/patterns.sample.json](docs/patterns.sample.json) 参照。
+パース失敗時はハードコードのみで動作し UI に警告バッジを出す（R9、起動は中断しない）。
+学習パイプライン（Python）は M4L 版 kemuri-bass-generator から移設予定で、出力先を
+この patterns.json にする。
 
 > M4L 版のように「同一トラック内のデバイスでクリップへ直接書き込む」ことは VST3 では不可
 > （Live API はプラグインから使えない）。その用途は Max for Live 版 kemuri-bass-generator を継続利用する。

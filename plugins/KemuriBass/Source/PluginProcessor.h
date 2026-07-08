@@ -9,7 +9,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include <kemuri_core/MidiAnalyzer.h>
+#include <kemuri_core/PatternBank.h>
 #include <kemuri_core/Rng.h>
+#include <kemuri_core/Types.h>
 
 #include "MidiSequence.h"
 
@@ -68,6 +70,14 @@ public:
     int          getLastNoteCount()   const { return lastNoteCount.load(); }
     juce::String getAnalysisSummary() const { return analysisSummary; }
 
+    // 学習パターン (patterns.json) の状態（UI 表示用）
+    juce::String getBankStatus() const { return bankStatus; }
+    bool         hasBankWarning() const { return bankWarning; }
+
+    // 直近生成のノート（UI プレビュー用のスナップショット、message thread）
+    std::vector<kemuri::core::OutNote> getPreviewNotes() const;
+    double getPreviewLengthBeats() const;
+
     bool exportToMidiFile (const juce::File& dest);
 
 private:
@@ -99,6 +109,12 @@ private:
         juce::CharPointer_UTF8 ("\xE3\x81\x86\xE3\x82\x8F\xE3\x83\x8D\xE3\x82\xBF MIDI \xE3\x82\x92"
                                 "\xE3\x81\x93\xE3\x81\x93\xE3\x81\xB8\xE3\x83\x89\xE3\x83\xAD\xE3\x83\x83"
                                 "\xE3\x83\x97\xE3\x81\xA7 Analyze") };
+
+    // 学習パターン束（patterns.json をマージ済み, R6/R9）
+    kemuri::core::PatternBank bank;
+    juce::String              bankStatus;
+    bool                      bankWarning = false;
+    void loadPatternBank();
 
     // オーディオスレッド状態
     const MidiSequence* lastRendered = nullptr;

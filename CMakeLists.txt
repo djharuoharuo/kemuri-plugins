@@ -22,6 +22,7 @@ add_subdirectory(libs/JUCE)
 add_subdirectory(common/kemuri_core)
 add_subdirectory(common/kemuri_ui)
 add_subdirectory(plugins/KemuriBass)
+add_subdirectory(plugins/KemuriStream)
 
 enable_testing()
 add_subdirectory(tests)

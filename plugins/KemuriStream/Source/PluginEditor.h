@@ -12,9 +12,10 @@
 namespace kemuri
 {
 
-// M0: 骨格エディタ（タイトル / プラットフォーム選択 / トグル）。
-// メーターとアドバイス表示は M1〜M3 で追加する。
-class KemuriStreamEditor : public juce::AudioProcessorEditor
+// M1: メーター表示（Integrated / Momentary / True Peak / PLR）+ プラットフォーム選択
+// + トグル + Reset。アドバイス表示は M3 で追加する。
+class KemuriStreamEditor : public juce::AudioProcessorEditor,
+                           private juce::Timer
 {
 public:
     explicit KemuriStreamEditor (KemuriStreamProcessor&);
@@ -24,14 +25,29 @@ public:
     void resized() override;
 
 private:
+    void timerCallback() override;
+
+    // 「ラベル: 値」の 1 行メーターを作る補助
+    struct MeterRow
+    {
+        juce::Label caption;
+        juce::Label value;
+    };
+    void setupMeter (MeterRow& row, const juce::String& caption);
+    void layoutMeter (MeterRow& row, juce::Rectangle<int> area);
+
     KemuriStreamProcessor& processorRef;
     ui::KemuriLookAndFeel  lookAndFeel;
 
     juce::Label     titleLabel;
     juce::ComboBox  platformBox;
-    juce::ToggleButton bypassButton   { "Bypass" };
-    juce::ToggleButton autoLoudButton { "Auto LUFS" };
+    juce::ToggleButton bypassButton    { "Bypass" };
+    juce::ToggleButton autoLoudButton  { "Auto LUFS" };
     juce::ToggleButton realCodecButton { "Real Codec (Opus)" };
+    juce::TextButton   resetButton     { "Reset" };
+
+    MeterRow integratedMeter, momentaryMeter, truePeakMeter, plrMeter;
+    juce::Rectangle<int> meterPanel;
 
     using ComboAttachment  = juce::AudioProcessorValueTreeState::ComboBoxAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;

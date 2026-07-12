@@ -1,6 +1,11 @@
 #pragma once
 
+#include <atomic>
+
 #include <juce_audio_processors/juce_audio_processors.h>
+
+#include "dsp/GatedLoudness.h"
+#include "dsp/TruePeak.h"
 
 namespace kemuri
 {
@@ -54,6 +59,16 @@ public:
 
     juce::AudioProcessorValueTreeState& getApvts() { return apvts; }
 
+    // ── 測定値スナップショット（UI 用、message thread から読む）─────────
+    float getIntegratedLufs() const noexcept { return integratedLufs.load (std::memory_order_relaxed); }
+    float getMomentaryLufs()  const noexcept { return momentaryLufs.load  (std::memory_order_relaxed); }
+    float getTruePeakDb()     const noexcept { return truePeakDb.load     (std::memory_order_relaxed); }
+    float getPlr()            const noexcept { return plr.load            (std::memory_order_relaxed); }
+    bool  hasMeasurement()    const noexcept { return measured.load       (std::memory_order_relaxed); }
+
+    // Reset ボタン（R9）: 次の processBlock で測定履歴をクリアする
+    void requestResetMeasurement() noexcept { resetRequested.store (true, std::memory_order_relaxed); }
+
 private:
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 
@@ -61,6 +76,19 @@ private:
     juce::AudioParameterBool* bypassParam = nullptr;
 
     double sampleRate = 44100.0;
+
+    // ── 測定エンジン（音声スレッド）────────────────────────────────
+    dsp::GatedLoudness  loudness;
+    dsp::TruePeakMeter  truePeak;
+    float               truePeakHoldLin = 0.0f;   // ピークホールド（線形）
+
+    // ── 測定値（audio→message の受け渡し。lock-free）───────────────
+    std::atomic<float> integratedLufs { -80.0f };
+    std::atomic<float> momentaryLufs  { -80.0f };
+    std::atomic<float> truePeakDb     { -200.0f };
+    std::atomic<float> plr            { 0.0f };
+    std::atomic<bool>  measured       { false };
+    std::atomic<bool>  resetRequested { false };
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (KemuriStreamProcessor)
 };

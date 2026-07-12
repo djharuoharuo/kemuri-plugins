@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 
+#include <cmath>
+
 #include "PluginEditor.h"
 
 namespace kemuri
@@ -37,6 +39,18 @@ juce::AudioProcessorValueTreeState::ParameterLayout KemuriStreamProcessor::creat
 void KemuriStreamProcessor::prepareToPlay (double newSampleRate, int)
 {
     sampleRate = newSampleRate;
+
+    // R17: サンプルレート変更のたびに係数・測定窓を再計算する
+    const int nc = juce::jmax (1, getTotalNumInputChannels());
+    loudness.prepare (sampleRate, nc);
+    truePeak.prepare (nc);
+    truePeakHoldLin = 0.0f;
+
+    integratedLufs.store (-80.0f,  std::memory_order_relaxed);
+    momentaryLufs.store  (-80.0f,  std::memory_order_relaxed);
+    truePeakDb.store     (-200.0f, std::memory_order_relaxed);
+    plr.store            (0.0f,    std::memory_order_relaxed);
+    measured.store       (false,   std::memory_order_relaxed);
 }
 
 void KemuriStreamProcessor::releaseResources() {}
@@ -62,7 +76,48 @@ void KemuriStreamProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     for (int ch = getTotalNumInputChannels(); ch < getTotalNumOutputChannels(); ++ch)
         buffer.clear (ch, 0, buffer.getNumSamples());
 
-    // M0: パススルー（信号は素通し）。M1 以降で測定・処理を挿入する。
+    // Reset 要求（R9）: 履歴・ピークホールドをクリア
+    if (resetRequested.exchange (false, std::memory_order_relaxed))
+    {
+        loudness.reset();
+        truePeak.reset();
+        truePeakHoldLin = 0.0f;
+        measured.store (false, std::memory_order_relaxed);
+    }
+
+    // ── 測定（入力を非破壊で解析）。R12: 確保・ロックなし ─────────────
+    const int numCh      = juce::jmin (buffer.getNumChannels(), 2);
+    const int numSamples = buffer.getNumSamples();
+    if (numCh > 0 && numSamples > 0)
+    {
+        const float* chPtrs[2] = { nullptr, nullptr };
+        for (int ch = 0; ch < numCh; ++ch)
+            chPtrs[ch] = buffer.getReadPointer (ch);
+
+        loudness.process (chPtrs, numCh, numSamples);
+        truePeak.process (chPtrs, numCh, numSamples);
+
+        // True Peak はピークホールド（Reset まで最大値を保持）
+        const float tpLin = truePeak.getPeakLinear();
+        if (tpLin > truePeakHoldLin) truePeakHoldLin = tpLin;
+
+        const float li = static_cast<float> (loudness.getIntegratedLufs());
+        const float mo = static_cast<float> (loudness.getMomentaryLufs());
+        const float tp = (truePeakHoldLin > 0.0f)
+                             ? static_cast<float> (20.0 * std::log10 (truePeakHoldLin))
+                             : -200.0f;
+
+        integratedLufs.store (li, std::memory_order_relaxed);
+        momentaryLufs.store  (mo, std::memory_order_relaxed);
+        truePeakDb.store     (tp, std::memory_order_relaxed);
+        if (loudness.hasIntegrated())
+        {
+            plr.store (tp - li, std::memory_order_relaxed);   // PLR = TP - integrated
+            measured.store (true, std::memory_order_relaxed);
+        }
+    }
+
+    // M1: 音声はパススルー（測定のみ）。M2 で処理チェーンを挿入する。
 }
 
 juce::AudioProcessorEditor* KemuriStreamProcessor::createEditor()

@@ -64,3 +64,26 @@ target_link_libraries(kemuri_patterns_tests PRIVATE
     juce::juce_recommended_warning_flags)
 
 add_test(NAME kemuri_patterns_tests COMMAND kemuri_patterns_tests)
+
+# G3 (KemuriStream): 測定 DSP（Biquad / GatedLoudness / TruePeak）が
+# Python 正本（codec_eq.py / pyloudnorm / analyzer.py）と一致することを検証。
+juce_add_console_app(kemuri_stream_tests
+    PRODUCT_NAME "kemuri_stream_tests")
+
+target_sources(kemuri_stream_tests PRIVATE StreamTests.cpp)
+
+target_include_directories(kemuri_stream_tests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../plugins/KemuriStream/Source)
+
+target_compile_definitions(kemuri_stream_tests PRIVATE
+    KEMURI_REFERENCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/reference"
+    JUCE_WEB_BROWSER=0
+    JUCE_USE_CURL=0
+    JUCE_STANDALONE_APPLICATION=1)
+
+target_link_libraries(kemuri_stream_tests PRIVATE
+    juce::juce_core
+    juce::juce_recommended_config_flags
+    juce::juce_recommended_warning_flags)
+
+add_test(NAME kemuri_stream_tests COMMAND kemuri_stream_tests)

@@ -39,7 +39,17 @@ struct AnalysisResult
     bool                  hasOnset            = false;
     double                notesPerBar         = 0.0;
     int                   suggestedComplexity = -1;
+    bool                  hasSwing            = false;   // v1.5: スイング検出
+    int                   swingPercent        = 50;      // 50=ストレート, 58=Dilla 級
 };
+
+// 小節グリッド整列: start をどれだけ引けば小節頭に揃うか（4 beats = 1 小節）。
+// 解析窓や .mid の先頭が小節境界にないと全小節判定がズレるため、丸ごと小節ぶんだけ
+// 引いて拍内位置（アウフタクト含む）を保存する。
+inline double barAlignOffset (double startBeats)
+{
+    return std::floor (startBeats / 4.0) * 4.0;
+}
 
 // note-on / note-off をペアリングして RawNote 列にする。
 // start は windowStart 起点、閉じないノートは windowEnd までの長さ（最低 0.25）。
@@ -144,14 +154,14 @@ inline AnalysisResult analyzeNotes (const std::vector<RawNote>& notes)
 
     r.hasInput = true;
 
-    // pitch-class ヒストグラム（ノート数）＋ 最終オンセット小節
-    // クリップ長はオンセット基準: 最後の発音がある小節まで。サスティンが次の小節へ
+    // pitch-class ヒストグラム（v1.5: 音価重み — TKP 系プロファイルの標準）＋
+    // 最終オンセット小節。クリップ長はオンセット基準: サスティンが次の小節へ
     // 食み出しても小節数を膨らませない（「8小節ループが9小節」誤検出の根治）。
     std::array<double, 12> hist {};
     int lastOnsetBar = 0;
     for (const auto& n : notes)
     {
-        hist[static_cast<size_t> (((n.pitch % 12) + 12) % 12)] += 1.0;
+        hist[static_cast<size_t> (((n.pitch % 12) + 12) % 12)] += std::max (0.1, n.duration);
         lastOnsetBar = std::max (lastOnsetBar,
                                  static_cast<int> (std::floor (n.start / 4.0 + 1e-9)));
     }
@@ -191,6 +201,34 @@ inline AnalysisResult analyzeNotes (const std::vector<RawNote>& notes)
     r.notesPerBar = static_cast<double> (notes.size()) / std::max (1, r.clipBars);
     r.suggestedComplexity = std::clamp (
         static_cast<int> (std::llround ((r.notesPerBar - 1.5) / 6.5 * 100.0)), 0, 100);
+
+    // ── スイング推定（v1.5）────────────────────────────────────────
+    // MPC 系 16 分スイングは奇数 16 分（拍内 0.25 / 0.75）を遅らせる。
+    // 各オンセットの半拍内位置 frac をとり、オフビート 16 分域 [0.15, 0.42] の
+    // サンプルから swing% = frac / 0.5 * 100 の中央値を推定する。
+    // クオンタイズ済み（frac=0.25）は 50% → スイングなし扱い。
+    {
+        std::vector<double> samples;
+        for (const auto& n : notes)
+        {
+            double frac = std::fmod (n.start, 0.5);
+            if (frac < 0.0) frac += 0.5;
+            if (frac >= 0.15 && frac <= 0.42)
+                samples.push_back (frac / 0.5 * 100.0);
+        }
+        if (samples.size() >= 4)
+        {
+            std::nth_element (samples.begin(),
+                              samples.begin() + static_cast<long> (samples.size() / 2),
+                              samples.end());
+            const double median = samples[samples.size() / 2];
+            if (median >= 52.0)   // 2% 未満の遅れはノイズ扱い
+            {
+                r.swingPercent = std::clamp (static_cast<int> (std::lround (median)), 50, 66);
+                r.hasSwing     = true;
+            }
+        }
+    }
 
     return r;
 }

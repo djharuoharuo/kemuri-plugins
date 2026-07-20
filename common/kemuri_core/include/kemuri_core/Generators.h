@@ -40,6 +40,7 @@ struct GenerateConfig
 
     std::optional<std::array<double, 16>> onsetHist;   // topline call & response
     const PatternBank*                    bank = nullptr;   // 学習パターン束（null=既定）
+    int                                   swingOverride = 0; // v1.5: 検出スイング%（0=なし）
 };
 
 // cfg.bank が null のときのハードコード既定束。
@@ -337,6 +338,8 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         L = cfg.loopBars;
     if (L < 1) L = 1;
 
+    double varIntensity = 1.0;   // スタイル別変異強度（モチーフ選択時に確定）
+
     auto makeParams = [&] (int bar, bool withDev) -> BarParams
     {
         const auto chordsThis = chordAtBar (bar,     useHalfBar, cfg);
@@ -349,6 +352,8 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         p.useHalfBar = useHalfBar;
         p.barIndex   = bar;
         p.compFactor = cfg.complexity / 100.0;
+        p.swingOverride = cfg.swingOverride;
+        p.varIntensity  = varIntensity;
         if (withDev)
         {
             const auto f = computePhrase (cfg.bars, cfg.fill, bar);
@@ -365,18 +370,31 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         return p;
     };
 
-    // モチーフの固定: セル小節ごとにプロデューサ束からパターンを 1 回だけ選ぶ。
-    // 学習遷移（Markov）があればそれで、無ければ一様ランダム。groove は束ごと。
+    // モチーフの固定（v1.6 研究準拠）:
+    //  - プロデューサ束は「1 生成につき 1 つ」選ぶ（旧: セル毎シャッフルは
+    //    実在しない through-composed な線を作り、個性を消していた）。
+    //  - パターンは密度重み付きで選ぶ: target notes/bar = base + span * Complexity。
+    //    Premier 2+2c（default 2.6/bar）… busy は Funk/SoulJazz レーンに限定。
+    //  - 変異強度はプロデューサ別（Premier ≈ verbatim 0.15 … 研究の変異モデル）。
     struct Motif { const Pattern* pat = nullptr; const ProducerLib* lib = nullptr; };
     std::vector<Motif> cellMotifs (static_cast<size_t> (L));
     if (lockLoop && patternStyle)
+    {
+        const ProducerLib& pl = producerForStyle (bank, cfg.style, rng);   // 生成につき 1 回
+        const Transitions* tr = pl.transitions.empty() ? nullptr : &pl.transitions;
+
+        const double c01 = cfg.complexity / 100.0;
+        double targetNpb = 3.0 + 2.0 * c01, capNpb = 5.0;
+        if (&pl == &bank.premier) { targetNpb = 2.0 + 2.0 * c01; capNpb = 5.0; varIntensity = 0.15; }
+        else if (&pl == &bank.dilla) { targetNpb = 3.0 + 2.0 * c01; capNpb = 6.0; varIntensity = 0.7; }
+        else if (&pl == &bank.ninth) { varIntensity = 0.4; }
+        else if (&pl == &bank.pete)  { varIntensity = 0.4; }
+        else /* pool */              { targetNpb = 2.5 + 2.5 * c01; capNpb = 6.0; varIntensity = 0.5; }
+
         for (int c = 0; c < L; ++c)
-        {
-            const ProducerLib& pl = producerForStyle (bank, cfg.style, rng);
-            const Transitions* tr = pl.transitions.empty() ? nullptr : &pl.transitions;
             cellMotifs[static_cast<size_t> (c)] =
-                { &selector.pickPattern (pl.patterns, tr, rng, cfg.onsetHist), &pl };
-        }
+                { &selector.pickPattern (pl.patterns, tr, rng, cfg.onsetHist, targetNpb, capNpb), &pl };
+    }
 
     // 同一（セル, ハーモニー文脈）の繰り返しは同一結果を再利用する
     std::map<std::string, std::vector<OutNote>> cache;
@@ -431,6 +449,10 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         {
             n.start += barOff;
             if (n.vel == 0) n.vel = 127;
+            // v1.6: 手続き系（Funk/SoulJazz/LoFi）にもソフト音域上限（ジャズ系は
+            // A2=45 まで許容）。パターン系は applyVariations 内で 44 適用済み。
+            if (! patternStyle)
+                n.pitch = reflectCeiling (n.pitch, n.dur, 45);
             notes.push_back (n);
         }
     }

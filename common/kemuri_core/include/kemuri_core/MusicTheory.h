@@ -36,6 +36,15 @@ inline constexpr std::array<double, 12> kChordTmplMaj {
 inline constexpr std::array<double, 12> kChordTmplMin {
     1.0, 0.05, 0.2, 0.8, 0.05, 0.2, 0.05, 0.8, 0.05, 0.2, 0.4, 0.05 };
 
+// Seventh-chord templates（v1.5: ソウル/ジャズ系うわネタの root 精度向上）。
+// 出力 quality へは dom7/maj7→"maj"、m7→"min" とマップする。
+inline constexpr std::array<double, 12> kChordTmplDom7 {
+    1.0, 0.05, 0.2, 0.05, 0.8, 0.1, 0.05, 0.8, 0.05, 0.2, 0.7, 0.05 };
+inline constexpr std::array<double, 12> kChordTmplMin7 {
+    1.0, 0.05, 0.2, 0.8, 0.05, 0.2, 0.05, 0.8, 0.05, 0.2, 0.7, 0.05 };
+inline constexpr std::array<double, 12> kChordTmplMaj7 {
+    1.0, 0.05, 0.2, 0.05, 0.8, 0.1, 0.05, 0.8, 0.05, 0.2, 0.05, 0.7 };
+
 // Snap a pitch into the bass range without changing pitch class.
 inline int clampBass (int midi)
 {

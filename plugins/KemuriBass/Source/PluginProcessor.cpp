@@ -127,6 +127,8 @@ void KemuriBassProcessor::requestGenerate()
         cfg.loopBars       = analysis.loopBars;
         if (analysis.hasOnset)
             cfg.onsetHist = analysis.onsetHist;
+        if (analysis.hasSwing)
+            cfg.swingOverride = analysis.swingPercent;   // v1.5: 同じポケットに乗せる
     }
 
     auto seq = std::make_unique<MidiSequence>();
@@ -187,7 +189,11 @@ void KemuriBassProcessor::applyAnalysis (const std::vector<kemuri::core::RawNote
     analysisSummary = juce::String (sourceTag) + "Key " + kKeyNames[analysis.keyRoot] + " "
                       + (analysis.keyMode == 0 ? "Maj" : "Min")
                       + "  |  Loop " + juce::String (analysis.loopBars) + " bars"
-                      + "  |  " + juce::String (analysis.notesPerBar, 1) + " n/bar"
+                      + "  |  " + juce::String (analysis.notesPerBar, 1)
+                      + " n/bar (Comp\xe2\x89\x88" + juce::String (analysis.suggestedComplexity) + ")"
+                      + (analysis.hasSwing
+                             ? "  |  swing " + juce::String (analysis.swingPercent) + "%"
+                             : juce::String())
                       + "  |  " + prog;
 }
 
@@ -209,8 +215,11 @@ void KemuriBassProcessor::requestAnalyze()
         return;
     }
 
-    const double windowEnd   = recentEvents.back().ppq;
-    const double windowStart = std::max (recentEvents.front().ppq, windowEnd - kWindowBeats);
+    const double windowEnd = recentEvents.back().ppq;
+    // v1.5: 窓の先頭を小節境界に整列（ホスト ppq は小節グリッド絶対値）。
+    // 整列しないと途中再生開始時に全小節判定がズレる。
+    const double rawStart    = std::max (recentEvents.front().ppq, windowEnd - kWindowBeats);
+    const double windowStart = kemuri::core::barAlignOffset (rawStart);
 
     std::vector<RawEvent> events;
     events.reserve (recentEvents.size());
@@ -261,7 +270,11 @@ bool KemuriBassProcessor::analyzeMidiFile (const juce::File& file)
     if (notes.empty())
         return false;
 
-    for (auto& n : notes) n.start -= minStart;   // 先頭を 0 に揃える
+    // v1.5: 丸ごと小節ぶんだけ引いて拍内位置を保存（先頭ノート基準で引くと
+    // アウフタクトや裏拍開始のクリップで全小節判定がズレる）。SMF の t=0 が
+    // 小節グリッド原点なので、先行する空小節のみ取り除く。
+    const double barOffset = kemuri::core::barAlignOffset (minStart);
+    for (auto& n : notes) n.start -= barOffset;
     std::sort (notes.begin(), notes.end(),
                [] (const RawNote& a, const RawNote& b) { return a.start < b.start; });
 

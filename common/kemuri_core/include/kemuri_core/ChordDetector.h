@@ -123,6 +123,9 @@ inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote
     }
 
     // emission（log スコア、セグメント毎に最大値で正規化）
+    // v1.5: セブンス系テンプレートを追加し、quality へは dom7/maj7→maj, m7→min と
+    // マップ（状態数は 24 のまま）。pch は音価重み + 低音バイアス（ベース寄りの音ほど
+    // root の証拠として強い — 相対長短調の曖昧さ Am7 vs C の解消に効く）。
     std::vector<std::array<double, nSt>> em (static_cast<size_t> (numSeg));
     std::vector<bool> segHasNotes (static_cast<size_t> (numSeg), false);
     for (int s = 0; s < numSeg; ++s)
@@ -136,7 +139,8 @@ inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote
             const double nEnd   = std::min (n.start + n.duration, sEnd);
             if (nEnd > nStart)
             {
-                pch[static_cast<size_t> (((n.pitch % 12) + 12) % 12)] += (nEnd - nStart);
+                const double lowBias = 1.0 + std::max (0, 60 - n.pitch) * 0.01;   // C4 以下を漸増強調
+                pch[static_cast<size_t> (((n.pitch % 12) + 12) % 12)] += (nEnd - nStart) * lowBias;
                 segHasNotes[static_cast<size_t> (s)] = true;
             }
         }
@@ -148,19 +152,41 @@ inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote
             continue;
         }
 
+        // quality ごとのテンプレート族（maj: triad/dom7/maj7、min: triad/m7）
+        static constexpr std::array<const std::array<double, 12>*, 3> majFam {
+            &kChordTmplMaj, &kChordTmplDom7, &kChordTmplMaj7 };
+        static constexpr std::array<const std::array<double, 12>*, 2> minFam {
+            &kChordTmplMin, &kChordTmplMin7 };
+
+        auto famScore = [&pch] (const std::array<double, 12>& tmpl, int r) -> double
+        {
+            double sc = 0.0;
+            for (int j = 0; j < 12; ++j)
+                sc += pch[static_cast<size_t> (j)] * tmpl[static_cast<size_t> ((j - r + 12) % 12)];
+            return sc;
+        };
+
         double maxSc = 1e-12;
         std::array<double, nSt> raw {};
         for (int r = 0; r < 12; ++r)
         {
-            for (int qi = 0; qi < 2; ++qi)
+            double majBest = 0.0;
+            for (const auto* t : majFam) majBest = std::max (majBest, famScore (*t, r));
+            double minBest = 0.0;
+            for (const auto* t : minFam) minBest = std::max (minBest, famScore (*t, r));
+
+            // ルート不在ペナルティ: ルート音が鳴っていない候補は減点。
+            // 7th テンプレートは部分集合の重なりが大きく（C-E-G は Am7 の 3/4）、
+            // これが無いと相対長短調へ誤った吸着が起きる。ルートは最重要証拠。
+            if (pch[static_cast<size_t> (r)] <= 0.0)
             {
-                const auto& tmpl = (qi == 0) ? kChordTmplMaj : kChordTmplMin;
-                double sc = 0.0;
-                for (int j = 0; j < 12; ++j)
-                    sc += pch[static_cast<size_t> (j)] * tmpl[static_cast<size_t> ((j - r + 12) % 12)];
-                raw[static_cast<size_t> (r * 2 + qi)] = sc;
-                maxSc = std::max (maxSc, sc);
+                majBest *= 0.75;
+                minBest *= 0.75;
             }
+
+            raw[static_cast<size_t> (r * 2 + 0)] = majBest;
+            raw[static_cast<size_t> (r * 2 + 1)] = minBest;
+            maxSc = std::max ({ maxSc, majBest, minBest });
         }
         // β=4 で emission を鋭くする（1 セグメント = 1 観測のため）。
         // 境界: 現和音のスコアが最良の ~88% を下回ると切替が勝つ較正

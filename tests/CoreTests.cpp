@@ -373,6 +373,133 @@ void testViterbi()
             "viterbi empty segment inherits");
 }
 
+// v1.5: セブンス系コード検出（dom7→maj / m7→min マップ、低音バイアス）。
+void testSeventhChords()
+{
+    // G7 (G-B-D-F) → G maj
+    std::vector<RawNote> g7;
+    for (int p : { 55, 59, 62, 65 }) g7.push_back ({ p, 0.0, 4.0 });
+    const auto pg = detectProgressionViterbi (g7, 4.0, 4.0, 0, 0);
+    expect (pg.size() == 1 && pg[0].root == 7 && pg[0].quality == "maj",
+            "G7 detected as G maj");
+
+    // Dm7 (D-F-A-C) → D min
+    std::vector<RawNote> dm7;
+    for (int p : { 50, 53, 57, 60 }) dm7.push_back ({ p, 0.0, 4.0 });
+    const auto pd = detectProgressionViterbi (dm7, 4.0, 4.0, 0, 0);
+    expect (pd.size() == 1 && pd[0].root == 2 && pd[0].quality == "min",
+            "Dm7 detected as D min");
+
+    // Am7 with A bass (A2 + C-E-G) → A min（C maj と誤らない: 低音バイアス）
+    std::vector<RawNote> am7 { { 45, 0.0, 4.0 }, { 60, 0.0, 4.0 },
+                               { 64, 0.0, 4.0 }, { 67, 0.0, 4.0 } };
+    const auto pa = detectProgressionViterbi (am7, 4.0, 4.0, 9, 1);
+    expect (pa.size() == 1 && pa[0].root == 9 && pa[0].quality == "min",
+            "Am7 with bass A detected as A min");
+
+    // 純三和音の従来ケースが退行しないこと（quality マップ確認）
+    std::vector<RawNote> cmaj;
+    for (int p : { 48, 52, 55 }) cmaj.push_back ({ p, 0.0, 4.0 });
+    const auto pc = detectProgressionViterbi (cmaj, 4.0, 4.0, 0, 0);
+    expect (pc.size() == 1 && pc[0].root == 0 && pc[0].quality == "maj",
+            "pure C triad still C maj");
+}
+
+// v1.5: スイング推定 + 小節整列ヘルパー。
+void testSwingAndAlign()
+{
+    // barAlignOffset: 丸ごと小節ぶんだけ引く
+    expect (barAlignOffset (0.0) == 0.0,  "align 0");
+    expect (barAlignOffset (3.9) == 0.0,  "align mid-bar");
+    expect (barAlignOffset (4.0) == 4.0,  "align exact bar");
+    expect (barAlignOffset (9.5) == 8.0,  "align 9.5 → 8");
+
+    // 58% スイング（オフビート 16 分が 0.29 に遅れる）
+    std::vector<RawNote> swung;
+    for (int bar = 0; bar < 2; ++bar)
+        for (int beat = 0; beat < 4; ++beat)
+        {
+            const double base = bar * 4.0 + beat;
+            swung.push_back ({ 40, base, 0.2 });
+            swung.push_back ({ 40, base + 0.29, 0.2 });
+        }
+    const auto rs = analyzeNotes (swung);
+    expect (rs.hasSwing, "swing detected");
+    expect (std::abs (rs.swingPercent - 58) <= 1,
+            "swing ~58% got " + juce::String (rs.swingPercent));
+
+    // ストレート（0.25 ぴったり）→ スイングなし
+    std::vector<RawNote> straight;
+    for (int beat = 0; beat < 4; ++beat)
+    {
+        straight.push_back ({ 40, (double) beat, 0.2 });
+        straight.push_back ({ 40, beat + 0.25, 0.2 });
+    }
+    const auto rq = analyzeNotes (straight);
+    expect (! rq.hasSwing, "quantized input → no swing");
+
+    // スイングが生成に反映される（swingOverride でオフビートが遅れる）
+    {
+        Rng rng (4242u);
+        GenerateConfig cfg;
+        cfg.style = 1; cfg.bars = 4; cfg.complexity = 0; cfg.fill = 0;
+        cfg.swingOverride = 58;
+        const auto notes = buildNotes (cfg, rng);
+        // Premier はグリッド直（swing 0）のパターン群。override 適用後は
+        // 0.25 ちょうどのオフビート 16 分が残ってはいけない（0.29 へ遅れる）。
+        bool sawStraightOff = false;
+        for (const auto& n : notes)
+        {
+            const double frac = n.start - std::floor (n.start / 0.5) * 0.5;
+            if (std::abs (frac - 0.25) < 0.005) sawStraightOff = true;
+        }
+        expect (! sawStraightOff, "swingOverride shifts offbeat 16ths");
+    }
+}
+
+// v1.6: 密度と音域（研究準拠 — boom-bap は 2-4 音/小節が中心、高音は短音のみ）。
+void testDensityAndRegister()
+{
+    // Premier, default 相当 (Complexity 30): 平均 notes/bar が 1.2〜4.2 に収まる
+    {
+        double totalNotes = 0.0;
+        int totalBars = 0;
+        for (int seed = 0; seed < 100; ++seed)
+        {
+            Rng rng (static_cast<std::uint32_t> (seed) * 7919u + 13u);
+            GenerateConfig cfg;
+            cfg.style = 1; cfg.bars = 4; cfg.complexity = 30; cfg.fill = 20; cfg.root = 2;
+            const auto notes = buildNotes (cfg, rng);
+            totalNotes += static_cast<double> (notes.size());
+            totalBars  += cfg.bars;
+        }
+        const double npb = totalNotes / totalBars;
+        expect (npb >= 1.2 && npb <= 4.2,
+                "premier default density " + juce::String (npb, 2) + " n/bar in [1.2, 4.2]");
+    }
+
+    // 全スタイル: 長い音（>16分）が G#2/A2 のソフト上限を超えない
+    for (int style : { 0, 1, 2, 3, 4, 5, 6, 7 })
+    {
+        const int ceil = (style >= 5) ? 45 : 44;   // ジャズ系レーンのみ A2
+        for (int seed = 0; seed < 40; ++seed)
+        {
+            Rng rng (static_cast<std::uint32_t> (style * 1000 + seed) * 31u + 7u);
+            GenerateConfig cfg;
+            cfg.style = style; cfg.bars = 8; cfg.complexity = 70; cfg.fill = 60; cfg.root = 11;
+            const auto notes = buildNotes (cfg, rng);
+            for (const auto& n : notes)
+            {
+                if (n.dur > 0.25)
+                    expect (n.pitch <= ceil,
+                            "style " + juce::String (style) + " sustained pitch "
+                                + juce::String (n.pitch) + " <= " + juce::String (ceil));
+                expect (n.pitch <= ceil + 2, "short notes stay <= ceil+2");
+            }
+        }
+    }
+}
+
 // v1.2: Temperley-Kostka-Payne キー検出。
 void testTemperleyKey()
 {
@@ -464,6 +591,9 @@ int main()
     testLoopLock();
     testViterbi();
     testTemperleyKey();
+    testSeventhChords();
+    testSwingAndAlign();
+    testDensityAndRegister();
 
     std::printf ("%d checks, %d failures\n", checks, failures);
     if (failures == 0) std::printf ("All tests passed.\n");

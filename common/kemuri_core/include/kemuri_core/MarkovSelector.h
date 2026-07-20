@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cmath>
 #include <map>
 #include <optional>
 #include <string>
@@ -23,10 +24,13 @@ class MarkovSelector
 public:
     void reset() { lastPatName.clear(); }
 
-    // 学習遷移表があり前小節のパターンが分かれば 70% で Markov 追従、
-    // それ以外は一様ランダム（30% エスケープでスタックしない）。
+    // 学習遷移表があり前小節のパターンが分かれば 70% で Markov 追従。
+    // それ以外は密度重み付きサンプリング（v1.6: Complexity が選ぶのは
+    // 「どの密度のパターンか」— 既に密なパターンへ装飾を積まない）。
+    // targetNpb < 0 で従来の一様ランダム。
     const Pattern& sampleOne (const std::vector<Pattern>& lib,
-                              const Transitions* trans, Rng& rng) const
+                              const Transitions* trans, Rng& rng,
+                              double targetNpb = -1.0, double capNpb = 1e9) const
     {
         if (trans != nullptr && ! lastPatName.empty() && rng.next() < 0.7)
         {
@@ -51,20 +55,42 @@ public:
                 }
             }
         }
+
+        if (targetNpb > 0.0)
+        {
+            double total = 0.0;
+            std::vector<double> w (lib.size());
+            for (size_t i = 0; i < lib.size(); ++i)
+            {
+                const double npb = static_cast<double> (lib[i].notes.size());
+                w[i] = (npb > capNpb) ? 0.0 : std::exp (-std::abs (npb - targetNpb) / 0.75);
+                total += w[i];
+            }
+            if (total > 0.0)
+            {
+                double r = rng.next() * total;
+                for (size_t i = 0; i < lib.size(); ++i)
+                {
+                    r -= w[i];
+                    if (r <= 0.0) return lib[i];
+                }
+            }
+        }
         return lib[static_cast<size_t> (rng.next() * static_cast<double> (lib.size()))];
     }
 
     // トップライン解析済みなら複数候補から最も「応答」するものを選ぶ。
     const Pattern& pickPattern (const std::vector<Pattern>& lib,
                                 const Transitions* trans, Rng& rng,
-                                const std::optional<std::array<double, 16>>& onsetHist)
+                                const std::optional<std::array<double, 16>>& onsetHist,
+                                double targetNpb = -1.0, double capNpb = 1e9)
     {
         const int nCand = onsetHist.has_value() ? 3 : 1;
         const Pattern* best = nullptr;
         double bestScore = -1e300;
         for (int c = 0; c < nCand; ++c)
         {
-            const Pattern& cand = sampleOne (lib, trans, rng);
+            const Pattern& cand = sampleOne (lib, trans, rng, targetNpb, capNpb);
             const double sc = onsetHist.has_value()
                                   ? interactionScore (cand, *onsetHist)
                                   : 0.0;

@@ -180,13 +180,14 @@ inline std::vector<OutNote> genFunk (const BarParams& p, Rng& rng)
     const int oct  = clampBass (root + 12);
     const double comp = p.compFactor;
 
+    // v1.6.1: busy レーンとはいえ default (comp 0.3) で 4-5 音/小節に収める。
     notes.push_back ({ root, 0.0, 0.25, 0 });
-    if (rng.next() < 0.35 + comp * 0.4) notes.push_back ({ root, 0.25, 0.25, 0 });
-    if (rng.next() < 0.45 + comp * 0.3) notes.push_back ({ root, 0.75, 0.25, 0 });
-    if (rng.next() < 0.6)               notes.push_back ({ chordOrScale (root, ctx, comp, rng), 1.0, 0.25, 0 });
-    if (rng.next() < 0.35 + comp * 0.3) notes.push_back ({ root, 1.5, 0.25, 0 });
+    if (rng.next() < 0.15 + comp * 0.45) notes.push_back ({ root, 0.25, 0.25, 0 });
+    if (rng.next() < 0.25 + comp * 0.40) notes.push_back ({ root, 0.75, 0.25, 0 });
+    if (rng.next() < 0.30 + comp * 0.40) notes.push_back ({ chordOrScale (root, ctx, comp, rng), 1.0, 0.25, 0 });
+    if (rng.next() < 0.20 + comp * 0.35) notes.push_back ({ root, 1.5, 0.25, 0 });
 
-    if (rng.next() < 0.5 + comp * 0.3)
+    if (rng.next() < 0.35 + comp * 0.35)
     {
         notes.push_back ({ oct,  2.0,  0.25, 0 });
         notes.push_back ({ root, 2.25, 0.25, 0 });
@@ -196,7 +197,7 @@ inline std::vector<OutNote> genFunk (const BarParams& p, Rng& rng)
         notes.push_back ({ root, 2.0, 0.5, 0 });
     }
 
-    if (rng.next() < 0.4 + comp * 0.4)
+    if (rng.next() < 0.25 + comp * 0.40)
     {
         const int step = ctx.scale[static_cast<size_t> (2 + static_cast<int> (rng.next() * 2))];
         notes.push_back ({ snapNear (root + step, ctx.midAnchor), 2.75, 0.25, 0 });
@@ -207,23 +208,20 @@ inline std::vector<OutNote> genFunk (const BarParams& p, Rng& rng)
         const int nRootF = snapNear (p.nextCtx.midAnchor, ctx.midAnchor);
         notes.push_back ({ clampBass (nRootF - 2), 3.0,  0.25, 0 });
         notes.push_back ({ clampBass (nRootF - 1), 3.5,  0.25, 0 });
-        notes.push_back ({ clampBass (nRootF - 1), 3.75, 0.25, 0 });
     }
     else
     {
         notes.push_back ({ root, 3.0, 0.5, 0 });
-        if (rng.next() < 0.4 + comp * 0.4)
+        if (rng.next() < 0.25 + comp * 0.40)
             notes.push_back ({ chordOrScale (root, ctx, comp, rng), 3.5, 0.5, 0 });
     }
 
     if (p.isFill || p.isFinalClimax)
     {
+        // v1.6.1: 16 分 4 連は busy すぎ → 低域 2 音（root / 5th 系）に
         const auto& pent = ctx.penta;
-        for (double s = 3.0; s < 4.0; s += 0.25)
-        {
-            const int pIdx = static_cast<int> (rng.next() * pent.size());
-            notes.push_back ({ snapNear (root + pent[static_cast<size_t> (pIdx)], ctx.midAnchor), s, 0.25, 0 });
-        }
+        notes.push_back ({ snapNear (root + pent[3], ctx.midAnchor), 3.0, 0.25, 0 });
+        notes.push_back ({ root, 3.5, 0.25, 0 });
     }
     return notes;
 }
@@ -317,8 +315,9 @@ inline std::vector<std::pair<int, std::string>> chordAtBar (int barIdx, bool use
 //    再解決する（リフをコードに追従させる）。同一ハーモニーの繰り返しは完全に同一。
 //  - 展開はフレーズ端のみ（4=bar3 turn / 8=bar7 climax / 16=bar11 mid + bar15 climax、
 //    fill はループ後半のみ）。展開も固定モチーフを基に変形する。
-//  - ループ長 L: 検出ループが 2 回以上繰り返せる（L*2 <= bars）ときだけ採用。
-//    それ以外は既定 2 小節（検出不能・過大検出で毎小節ランダムに退化しない）。
+//  - 反復の単位はハーモニー: 同じ（現在,次）コード文脈の小節は完全同一の音になる
+//    （リフの verbatim 反復）。進行がある場合は同じリフが各コードへ再解決される。
+//    進行のループ巻き戻しは chordAtBar が cfg.loopBars で行う。
 //  - Soul-Jazz（歩くベース）はロックせず毎小節生成する。
 //  - 0 ノートならルート全音符 × Bars をフォールバック（R10）。
 inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
@@ -332,11 +331,6 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
     const bool patternStyle = (cfg.style >= 0 && cfg.style <= 4);
     GenContext gc { selector, rng, cfg.onsetHist, nullptr };
     const PatternBank& bank = (cfg.bank != nullptr) ? *cfg.bank : defaultBank();
-
-    int L = std::min (cfg.bars, 2);
-    if (lockLoop && cfg.useProgression && cfg.loopBars >= 1 && cfg.loopBars * 2 <= cfg.bars)
-        L = cfg.loopBars;
-    if (L < 1) L = 1;
 
     double varIntensity = 1.0;   // スタイル別変異強度（モチーフ選択時に確定）
 
@@ -370,39 +364,40 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
         return p;
     };
 
-    // モチーフの固定（v1.6 研究準拠）:
-    //  - プロデューサ束は「1 生成につき 1 つ」選ぶ（旧: セル毎シャッフルは
-    //    実在しない through-composed な線を作り、個性を消していた）。
+    // モチーフの固定（v1.6.1 研究準拠）:
+    //  - プロデューサ束は「1 生成につき 1 つ」、さらに**モチーフも 1 生成につき 1 つ**。
+    //    実曲の変奏モデルは「1 つの 1-2 小節リフを verbatim 反復 + フレーズ端フィル」。
+    //    旧: セル毎に別パターンを連結 → through-composed でデタラメに聴こえる。
     //  - パターンは密度重み付きで選ぶ: target notes/bar = base + span * Complexity。
     //    Premier 2+2c（default 2.6/bar）… busy は Funk/SoulJazz レーンに限定。
-    //  - 変異強度はプロデューサ別（Premier ≈ verbatim 0.15 … 研究の変異モデル）。
+    //  - 変異強度はプロデューサ別。Dilla の個性は音数でなく taming（jitter は
+    //    パターン由来で維持）なので密度変異は低く抑える。
     struct Motif { const Pattern* pat = nullptr; const ProducerLib* lib = nullptr; };
-    std::vector<Motif> cellMotifs (static_cast<size_t> (L));
+    Motif motif;
     if (lockLoop && patternStyle)
     {
         const ProducerLib& pl = producerForStyle (bank, cfg.style, rng);   // 生成につき 1 回
         const Transitions* tr = pl.transitions.empty() ? nullptr : &pl.transitions;
 
         const double c01 = cfg.complexity / 100.0;
-        double targetNpb = 3.0 + 2.0 * c01, capNpb = 5.0;
-        if (&pl == &bank.premier) { targetNpb = 2.0 + 2.0 * c01; capNpb = 5.0; varIntensity = 0.15; }
-        else if (&pl == &bank.dilla) { targetNpb = 3.0 + 2.0 * c01; capNpb = 6.0; varIntensity = 0.7; }
-        else if (&pl == &bank.ninth) { varIntensity = 0.4; }
-        else if (&pl == &bank.pete)  { varIntensity = 0.4; }
-        else /* pool */              { targetNpb = 2.5 + 2.5 * c01; capNpb = 6.0; varIntensity = 0.5; }
+        double targetNpb = 2.5 + 2.0 * c01, capNpb = 5.0;
+        if      (&pl == &bank.premier) { targetNpb = 2.0 + 2.0 * c01; varIntensity = 0.15; }
+        else if (&pl == &bank.dilla)   { varIntensity = 0.40; }
+        else if (&pl == &bank.ninth)   { varIntensity = 0.25; }
+        else if (&pl == &bank.pete)    { varIntensity = 0.25; }
+        else /* pool */                { targetNpb = 2.0 + 2.5 * c01; varIntensity = 0.30; }
 
-        for (int c = 0; c < L; ++c)
-            cellMotifs[static_cast<size_t> (c)] =
-                { &selector.pickPattern (pl.patterns, tr, rng, cfg.onsetHist, targetNpb, capNpb), &pl };
+        motif = { &selector.pickPattern (pl.patterns, tr, rng, cfg.onsetHist, targetNpb, capNpb), &pl };
     }
 
-    // 同一（セル, ハーモニー文脈）の繰り返しは同一結果を再利用する
+    // 同一ハーモニー文脈の繰り返しは同一結果を再利用する（モチーフは 1 つなので
+    // ハーモニーが同じなら小節位置に関係なく同じ音 = リフの verbatim 反復）
     std::map<std::string, std::vector<OutNote>> cache;
     auto harmonicKey = [&] (int bar) -> std::string
     {
         const auto t = chordAtBar (bar,     useHalfBar, cfg);
         const auto n = chordAtBar (bar + 1, useHalfBar, cfg);
-        std::string k = std::to_string (bar % L);
+        std::string k;
         for (const auto& c : t) { k += "|"; k += std::to_string (c.first); k += c.second; }
         for (const auto& c : n) { k += ">"; k += std::to_string (c.first); k += c.second; }
         return k;
@@ -415,10 +410,10 @@ inline std::vector<OutNote> buildNotes (const GenerateConfig& cfg, Rng& rng)
 
         auto motifBar = [&] (int b, bool withDev) -> std::vector<OutNote>
         {
-            const Motif& m  = cellMotifs[static_cast<size_t> (b % L)];
-            const auto   p  = makeParams (b, withDev);
-            const LearnedGroove* gr = (m.lib != nullptr && m.lib->hasGroove) ? &m.lib->groove : nullptr;
-            return applyVariations (*m.pat, p, rng, gr);
+            const auto p = makeParams (b, withDev);
+            const LearnedGroove* gr = (motif.lib != nullptr && motif.lib->hasGroove)
+                                          ? &motif.lib->groove : nullptr;
+            return applyVariations (*motif.pat, p, rng, gr);
         };
 
         std::vector<OutNote> barNotes;

@@ -478,6 +478,44 @@ void testDensityAndRegister()
                 "premier default density " + juce::String (npb, 2) + " n/bar in [1.2, 4.2]");
     }
 
+    // Dilla / 9th / Pete / Mix (default): boom-bap 帯 1.0〜4.8 n/bar
+    for (int style : { 0, 2, 3, 4 })
+    {
+        double totalNotes = 0.0;
+        int totalBars = 0;
+        for (int seed = 0; seed < 60; ++seed)
+        {
+            Rng rng (static_cast<std::uint32_t> (style * 500 + seed) * 104729u + 3u);
+            GenerateConfig cfg;
+            cfg.style = style; cfg.bars = 4; cfg.complexity = 30; cfg.fill = 20; cfg.root = 7;
+            const auto notes = buildNotes (cfg, rng);
+            totalNotes += static_cast<double> (notes.size());
+            totalBars  += cfg.bars;
+        }
+        const double npb = totalNotes / totalBars;
+        expect (npb >= 1.0 && npb <= 4.8,
+                "style " + juce::String (style) + " default density "
+                    + juce::String (npb, 2) + " n/bar in [1.0, 4.8]");
+    }
+
+    // Funk（意図的に busy なレーン）でも default で 7 n/bar は超えない
+    {
+        double totalNotes = 0.0;
+        int totalBars = 0;
+        for (int seed = 0; seed < 60; ++seed)
+        {
+            Rng rng (static_cast<std::uint32_t> (seed) * 65537u + 11u);
+            GenerateConfig cfg;
+            cfg.style = 6; cfg.bars = 4; cfg.complexity = 30; cfg.fill = 20; cfg.root = 4;
+            const auto notes = buildNotes (cfg, rng);
+            totalNotes += static_cast<double> (notes.size());
+            totalBars  += cfg.bars;
+        }
+        const double npb = totalNotes / totalBars;
+        expect (npb >= 2.5 && npb <= 7.0,
+                "funk default density " + juce::String (npb, 2) + " n/bar in [2.5, 7.0]");
+    }
+
     // 全スタイル: 長い音（>16分）が G#2/A2 のソフト上限を超えない
     for (int style : { 0, 1, 2, 3, 4, 5, 6, 7 })
     {

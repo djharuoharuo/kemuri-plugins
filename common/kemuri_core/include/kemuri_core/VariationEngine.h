@@ -156,8 +156,10 @@ inline std::vector<OutNote> applyVariations (const Pattern& pat, const BarParams
     }
     else if (p.isFill)
     {
-        const int pIdx = 1 + static_cast<int> (rng.next() * 3);
-        notes.push_back ({ 3.0, 0.25, clampBass (ctx.lowAnchor + ctx.penta[static_cast<size_t> (pIdx)]), 127 });
+        // v1.6.1: フィルの音は root か 5th のみ（ペンタ中域の色音はベースでは
+        // 「音色が変わった」ように聴こえる — 検証済み研究のフィル語彙に整合）
+        const int fillPitch = (rng.next() < 0.5) ? ctx.lowAnchor : ctx.lowAnchor + 7;
+        notes.push_back ({ 3.0, 0.25, clampBass (fillPitch), 127 });
     }
 
     std::sort (notes.begin(), notes.end(),

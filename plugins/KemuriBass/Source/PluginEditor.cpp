@@ -235,7 +235,12 @@ void KemuriBassEditor::timerCallback()
     sidechainLabel.setColour (juce::Label::textColourId,
                               sc == 2 ? ui::colours::accent : juce::Colour (0xffd08a3d));
 
-    bankLabel.setText (processorRef.getBankStatus(), juce::dontSendNotification);
+   #ifdef JucePlugin_VersionString
+    const juce::String version = "v" JucePlugin_VersionString "  |  ";
+   #else
+    const juce::String version = "dev  |  ";
+   #endif
+    bankLabel.setText (version + processorRef.getBankStatus(), juce::dontSendNotification);
     bankLabel.setColour (juce::Label::textColourId,
                          processorRef.hasBankWarning() ? juce::Colour (0xffd08a3d)
                                                        : ui::colours::textSecondary);

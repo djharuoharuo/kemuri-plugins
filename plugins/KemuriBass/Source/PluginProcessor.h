@@ -35,6 +35,7 @@ namespace pid
 
 // KemuriBass — Boom-Bap / Soul-Jazz ベースライン・ジェネレーター
 class KemuriBassProcessor : public juce::AudioProcessor,
+                            public juce::VST3ClientExtensions,
                             private juce::Timer
 {
 public:
@@ -54,6 +55,12 @@ public:
     bool producesMidi() const override          { return true; }
     bool isMidiEffect() const override          { return false; }
     double getTailLengthSeconds() const override { return 0.0; }
+
+    // v2.0.2: 入力はサイドチェイン 1 本だけで、VST3 では副入力（kAux）として公開する。
+    // 楽器プラグインのサイドチェインを Live に正しく渡させるための構成
+    // （主入力 kMain を先頭に置くと Live のサイドチェインが届かなかった）。
+    juce::VST3ClientExtensions* getVST3ClientExtensions() override { return this; }
+    bool getPluginHasMainInput() const override                   { return false; }
 
     int getNumPrograms() override                              { return 1; }
     int getCurrentProgram() override                           { return 0; }

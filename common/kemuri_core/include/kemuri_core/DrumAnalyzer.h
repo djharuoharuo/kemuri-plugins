@@ -22,6 +22,12 @@ struct KickAnalysis
     std::vector<std::vector<double>> bars;     // L 小節分。各小節内のキック位置（beats 0..4、スイング込みの実位置）
     bool hasSwing     = false;
     int  swingPercent = 50;
+
+    // 接続診断用（v2.0.2）: Drum Rack の Post FX などでは全パッドがチェーンの再生音程
+    // （既定 C3）の 1 音にまとまって届くことがあり、その場合はノート番号でキックを選べない。
+    int    distinctNotes = 0;     // 区間内のノートオンの種類数
+    double kickPerBar    = 0.0;   // 選んだノートの 1 小節あたり打数
+    double backbeatRate  = 0.0;   // 選んだノートが 2 拍目と 4 拍目の両方に鳴る小節の割合（スネア混入の目安）
 };
 
 // events: ドラムトラックのノートオン/オフ（ソング絶対位置 ppq）。
@@ -56,7 +62,9 @@ inline KickAnalysis analyzeKick (const std::vector<RawEvent>& events, long first
         if (kv.first <= 40)                   sc += 1.0;
         if (sc > bestScore) { bestScore = sc; best = kv.first; }
     }
-    r.kickNote = best;
+    r.kickNote      = best;
+    r.distinctNotes = static_cast<int> (hits.size());
+    r.kickPerBar    = hits[best] / static_cast<double> (numBars);
 
     // 小節ごとのキック位置
     std::vector<std::vector<double>> perBar (static_cast<size_t> (numBars));
@@ -72,6 +80,17 @@ inline KickAnalysis analyzeKick (const std::vector<RawEvent>& events, long first
         perBar[static_cast<size_t> (bar - firstBar)].push_back (std::max (0.0, pos));
     }
     for (auto& v : perBar) std::sort (v.begin(), v.end());
+
+    int backbeatBars = 0;
+    for (const auto& v : perBar)
+    {
+        auto near = [&v] (double beat)
+        {
+            return std::any_of (v.begin(), v.end(), [beat] (double p) { return std::abs (p - beat) < 0.08; });
+        };
+        if (near (1.0) && near (3.0)) ++backbeatBars;
+    }
+    r.backbeatRate = backbeatBars / static_cast<double> (numBars);
 
     // 周期（16 分に丸めたステップ集合の Dice 類似, 候補 1/2/4/8）
     auto stepSet = [] (const std::vector<double>& v)

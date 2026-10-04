@@ -41,10 +41,11 @@ namespace
 
 KemuriBassProcessor::KemuriBassProcessor()
     : AudioProcessor (BusesProperties()
-                          .withInput  ("Input",     juce::AudioChannelSet::stereo(), false)
-                          .withOutput ("Output",    juce::AudioChannelSet::stereo(), true)
-                          // v2: ネタの音を受けるサイドチェイン（Live 12 は VST3 の副入力を自動で公開）
-                          .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), true)),
+                          // v2.0.2: ネタの音を受けるサイドチェインだけを入力に持つ（VST3 では kAux,
+                          // getPluginHasMainInput() = false）。v2.0.1 までの「無効な主入力 + 副入力」
+                          // 構成では Live でサイドチェインを選んでも届かなかった。
+                          .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), true)
+                          .withOutput ("Output",    juce::AudioChannelSet::stereo(), true)),
       apvts (*this, nullptr, "PARAMETERS", createLayout())
 {
     audioFifoBuf.assign (static_cast<size_t> (kAudioFifoCapacity), 0.0f);
@@ -129,7 +130,7 @@ bool KemuriBassProcessor::isBusesLayoutSupported (const BusesLayout& layouts) co
     if (out != juce::AudioChannelSet::stereo() && out != juce::AudioChannelSet::mono())
         return false;
 
-    // 主入力（楽器なので通常は無効）とサイドチェインは 無効 / モノ / ステレオ を許す
+    // サイドチェインは 無効 / モノ / ステレオ を許す
     for (int i = 0; i < layouts.inputBuses.size(); ++i)
     {
         const auto& in = layouts.inputBuses.getReference (i);
@@ -345,7 +346,20 @@ void KemuriBassProcessor::requestAnalyze()
         for (const auto& e : recentEvents) events.push_back ({ e.ppq, e.pitch, e.isOn });
         const auto k = analyzeKick (events, firstBar, endBar);
         kickProblem.clear();
-        if (k.ok && (k.kickNote < 35 || k.kickNote > 51))
+        const bool padRange   = k.kickNote >= 35 && k.kickNote <= 51;
+        // Drum Rack のチェーンの再生音程（既定 C3 = 60）の 1 音だけで届いている:
+        //  - キックだけのチェーンを選んでいる → 打数が少なくスネアの 2・4 拍が無い → キックとして採用
+        //  - 全パッドが 1 音にまとまっている → キックを区別できないので Pre FX / Kick Drum を案内
+        // それ以外の音（ネタのチョップのパッド等）は従来どおりパッド範囲で判定する。
+        const bool singleNote = k.ok && k.distinctNotes == 1 && k.kickNote == 60;
+        const bool kickOnly   = singleNote && k.kickPerBar <= 6.0 && k.backbeatRate < 0.75;
+        if (singleNote && ! kickOnly)
+        {
+            kickV2 = {};
+            kickProblem = abletonNoteName (k.kickNote)
+                          + u8 (" \xE3\x81\xAE 1 \xE9\x9F\xB3\xE3\x81\xAB\xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\x8C\xE5\x85\xA8\xE9\x83\xA8\xE3\x81\xBE\xE3\x81\xA8\xE3\x81\xBE\xE3\x81\xA3\xE3\x81\xA6\xE5\xB1\x8A\xE3\x81\x84\xE3\x81\xA6\xE3\x81\x84\xE3\x81\xBE\xE3\x81\x99 \xE2\x80\x94 MIDI From \xE3\x81\xAE\xE4\xB8\x8B\xE3\x81\xAE\xE6\xAC\x84\xE3\x82\x92 Pre FX \xE3\x81\x8B Kick Drum \xE3\x81\xAB");
+        }
+        else if (k.ok && ! padRange && ! kickOnly)
         {
             // Drum Rack のパッド範囲（C1〜D#2 = 36〜51）外 → ドラムのトラックではない可能性が高い。
             // ネタのチョップをキックと取り違えないよう採用しない。
@@ -547,8 +561,15 @@ void KemuriBassProcessor::captureIncoming (const juce::MidiBuffer& midi, double 
 void KemuriBassProcessor::captureSidechain (juce::AudioBuffer<float>& buffer, double ppqStart,
                                             double beatsPerSample, bool isPlaying)
 {
-    auto* scBus = getBus (true, 1);
-    const bool busOn = scBus != nullptr && scBus->isEnabled() && scBus->getNumberOfChannels() > 0;
+    // ホストが有効にした最初の入力バス（通常はサイドチェイン = バス 0）から読む
+    int scIndex = -1;
+    for (int i = 0; i < getBusCount (true); ++i)
+        if (auto* b = getBus (true, i); b != nullptr && b->isEnabled() && b->getNumberOfChannels() > 0)
+        {
+            scIndex = i;
+            break;
+        }
+    const bool busOn = scIndex >= 0;
     sidechainEnabled.store (busOn);
     if (! busOn || ! isPlaying || beatsPerSample <= 0.0)
     {
@@ -556,7 +577,7 @@ void KemuriBassProcessor::captureSidechain (juce::AudioBuffer<float>& buffer, do
         sidechainLevel.store (sidechainLevel.load() * 0.9f);
         return;
     }
-    const auto sc  = getBusBuffer (buffer, true, 1);
+    const auto sc  = getBusBuffer (buffer, true, scIndex);
     const int  nCh = sc.getNumChannels();
     const int  n   = sc.getNumSamples();
     if (nCh <= 0 || n <= 0)

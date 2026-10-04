@@ -39,11 +39,21 @@ double m2hz (double m) { return 440.0 * std::pow (2.0, (m - 69.0) / 12.0); }
 
 struct DrumEvent { double ppq; int note; bool on; };
 
-void runScenario (double startBar, int style, const char* name)
+// ドラム MIDI の届き方（Live の MIDI From の下の欄）
+enum class DrumSource
+{
+    pads,        // Pre FX: パッドのノート（キック C1 / スネア D1 / ハット F#1）
+    mergedC3,    // Post FX: 全パッドがチェーンの再生音程 C3 の 1 音にまとまる
+    kickChainC3  // Kick Drum のチェーンだけ: キックが C3 で届く
+};
+
+void runScenario (double startBar, int style, const char* name, DrumSource drumSource = DrumSource::pads)
 {
     std::printf ("\n[%s] song starts at bar %.0f, style %d\n", name, startBar, style);
 
     KemuriBassProcessor proc;
+    expect (proc.getBusCount (true) == 1 && ! proc.getPluginHasMainInput(),
+            "single sidechain input, exposed as VST3 aux (no main input)");
     FakePlayHead ph;
     proc.setPlayHead (&ph);
 
@@ -68,12 +78,17 @@ void runScenario (double startBar, int style, const char* name)
     for (int bar = static_cast<int> (startBar); bar < static_cast<int> (startBar) + bars; ++bar)
     {
         const double b0 = bar * 4.0;
-        for (double k : { 0.0, 1.75, 2.5 }) { drums.push_back ({ b0 + k, 36, true }); drums.push_back ({ b0 + k + 0.1, 36, false }); }
-        for (double s : { 1.0, 3.0 })       { drums.push_back ({ b0 + s, 38, true }); drums.push_back ({ b0 + s + 0.1, 38, false }); }
+        const bool merged = drumSource == DrumSource::mergedC3;
+        const int  kickN  = drumSource == DrumSource::pads ? 36 : 60;
+        const int  snareN = merged ? 60 : 38;
+        const int  hatN   = merged ? 60 : 42;
+        for (double k : { 0.0, 1.75, 2.5 }) { drums.push_back ({ b0 + k, kickN, true }); drums.push_back ({ b0 + k + 0.1, kickN, false }); }
+        if (drumSource == DrumSource::kickChainC3) continue;
+        for (double s : { 1.0, 3.0 })       { drums.push_back ({ b0 + s, snareN, true }); drums.push_back ({ b0 + s + 0.1, snareN, false }); }
         for (int h = 0; h < 16; ++h)
         {
             const double pos = h * 0.25 + ((h % 2) ? 0.04 : 0.0);
-            drums.push_back ({ b0 + pos, 42, true }); drums.push_back ({ b0 + pos + 0.05, 42, false });
+            drums.push_back ({ b0 + pos, hatN, true }); drums.push_back ({ b0 + pos + 0.05, hatN, false });
         }
     }
 
@@ -131,8 +146,26 @@ void runScenario (double startBar, int style, const char* name)
     expect (summary.contains ("Key A Min"), "key = A minor");
     expect (summary.contains (juce::String::fromUTF8 ("\xE3\x83\xAB\xE3\x83\xBC\xE3\x83\x97" "2")), "neta loop = 2 bars");
     expect (summary.contains ("Am-F"), "progression Am-F (song-phase)");
-    expect (summary.contains ("C1"), "kick note C1 (36)");
-    expect (summary.contains ("swing 58%"), "swing 58% from drums");
+
+    if (drumSource == DrumSource::mergedC3)
+    {
+        // キックを区別できない → 採用せず、Pre FX / Kick Drum を案内。生成は定番キックで続行。
+        expect (summary.contains ("C3") && summary.contains ("Pre FX") && summary.contains ("Kick Drum"),
+                "merged C3 drums: explains and suggests Pre FX / Kick Drum");
+        proc.requestGenerate();
+        expect (! proc.getPreviewNotes().empty(), "still generates (fallback kicks)");
+        proc.releaseResources();
+        proc.setPlayHead (nullptr);
+        return;
+    }
+    if (drumSource == DrumSource::kickChainC3)
+        expect (summary.contains (juce::String::fromUTF8 ("\xE3\x82\xAD\xE3\x83\x83\xE3\x82\xAF: C3")),
+                "kick-only chain on C3 accepted as kick");
+    else
+    {
+        expect (summary.contains ("C1"), "kick note C1 (36)");
+        expect (summary.contains ("swing 58%"), "swing 58% from drums");
+    }
 
     if (auto* p = proc.getApvts().getParameter (pid::style))
         p->setValueNotifyingHost (p->convertTo0to1 (static_cast<float> (style)));
@@ -170,7 +203,7 @@ void runMisroutedScenario()
     std::printf ("\n[misrouted] sidechain disabled, MIDI input = neta chops (D#3)\n");
 
     KemuriBassProcessor proc;
-    if (auto* sc = proc.getBus (true, 1)) sc->enable (false);
+    if (auto* sc = proc.getBus (true, 0)) sc->enable (false);
     FakePlayHead ph;
     proc.setPlayHead (&ph);
     const double sr = 44100.0;
@@ -225,6 +258,8 @@ int main()
     runScenario (5.0, 1, "Premier from bar 5 (phase)");
     runScenario (0.0, 4, "Pete Rock");
     runScenario (0.0, 3, "9th Wonder");
+    runScenario (0.0, 1, "Drum Rack Post FX: all pads merged on C3", DrumSource::mergedC3);
+    runScenario (0.0, 1, "Drum Rack Kick Drum chain on C3", DrumSource::kickChainC3);
     runMisroutedScenario();
     std::printf ("\n%s (%d failures)\n", failures == 0 ? "E2E PASS" : "E2E FAILURES", failures);
     return failures == 0 ? 0 : 1;

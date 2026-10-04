@@ -75,8 +75,13 @@ public:
     juce::String getAnalysisSummary() const { return analysisSummary; }
     juce::String getGenerateSummary() const { return generateSummary; }
 
-    // ネタの音（サイドチェイン）がいま届いているか（UI 表示用）
-    bool isSidechainReceiving() const { return sidechainLevel.load() > 1.0e-4f; }
+    // サイドチェインの状態（UI 表示用）: 0 = 無効（Live でサイドチェイン未設定）、
+    // 1 = 有効だが無音（Audio From 未選択 / 停止中）、2 = ネタ受信中
+    int getSidechainState() const
+    {
+        if (! sidechainEnabled.load()) return 0;
+        return sidechainLevel.load() > 1.0e-4f ? 2 : 1;
+    }
 
     // 学習パターン (patterns.json) の状態（UI 表示用）
     juce::String getBankStatus() const { return bankStatus; }
@@ -133,6 +138,7 @@ private:
     double lastBpsDecim   = 0.0;
     kemuri::core::dsp::Biquad aa1, aa2;
     std::atomic<float> sidechainLevel { 0.0f };
+    std::atomic<bool>  sidechainEnabled { false };
 
     // message thread 状態
     kemuri::core::CapturedAudio captured;
@@ -147,6 +153,8 @@ private:
     kemuri::core::HarmonyAnalysis harmonyV2;     // ネタ（音 or .mid）
     kemuri::core::KickAnalysis    kickV2;        // ドラム MIDI のキック
     juce::String                  harmonySource; // "音" / ".mid"
+    juce::String                  netaProblem;   // ネタが読めなかった理由（接続ガイド）
+    juce::String                  kickProblem;   // キックが怪しい理由（接続ガイド）
     juce::String                  generateSummary;
     std::vector<double>           previewKickBeats;
     // 初期ヒント

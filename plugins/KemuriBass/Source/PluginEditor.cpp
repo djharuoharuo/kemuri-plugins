@@ -18,7 +18,7 @@ void MidiDragSource::paint (juce::Graphics& g)
     g.setColour (ui::colours::accent);
     g.drawRoundedRectangle (b, 6.0f, 1.2f);
     g.setColour (ui::colours::textPrimary);
-    g.setFont (juce::FontOptions (14.0f));
+    g.setFont (juce::FontOptions (17.0f, juce::Font::bold));
     g.drawText (juce::String::fromUTF8 ("\xE2\x87\xA9  Drag MIDI"),
                 getLocalBounds(), juce::Justification::centred);
 }
@@ -60,7 +60,7 @@ void PianoRollPreview::paint (juce::Graphics& g)
     if (notes.empty() || lengthBeats <= 0.0)
     {
         g.setColour (ui::colours::textSecondary);
-        g.setFont (juce::FontOptions (12.0f));
+        g.setFont (juce::FontOptions (16.0f));
         g.drawText ("preview", getLocalBounds(), juce::Justification::centred);
         return;
     }
@@ -91,11 +91,11 @@ void PianoRollPreview::paint (juce::Graphics& g)
     }
 
     // あなたのキック位置（下端のマーカー）
-    g.setColour (ui::colours::textPrimary.withAlpha (0.55f));
+    g.setColour (ui::colours::textPrimary.withAlpha (0.7f));
     for (double k : kicks)
     {
         const float x = b.getX() + b.getWidth() * (float) (k / lengthBeats);
-        g.fillRect (x, b.getBottom() - 4.0f, 2.0f, 4.0f);
+        g.fillRect (x, b.getBottom() - 8.0f, 3.0f, 8.0f);
     }
 }
 
@@ -103,10 +103,11 @@ void PianoRollPreview::paint (juce::Graphics& g)
 KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     : AudioProcessorEditor (&p), processorRef (p)
 {
+    lookAndFeel.setBaseFontSize (16.0f);   // 読みやすい文字サイズ（v2.0.1）
     setLookAndFeel (&lookAndFeel);
 
     titleLabel.setText ("kemuriBass", juce::dontSendNotification);
-    titleLabel.setFont (juce::FontOptions (26.0f, juce::Font::bold));
+    titleLabel.setFont (juce::FontOptions (32.0f, juce::Font::bold));
     titleLabel.setColour (juce::Label::textColourId, ui::colours::accent);
     titleLabel.setJustificationType (juce::Justification::centredLeft);
     addAndMakeVisible (titleLabel);
@@ -130,7 +131,7 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     auto makeCaption = [this] (juce::Label& l, const juce::String& text)
     {
         l.setText (text, juce::dontSendNotification);
-        l.setFont (juce::FontOptions (12.0f));
+        l.setFont (juce::FontOptions (15.0f));
         l.setColour (juce::Label::textColourId, ui::colours::textSecondary);
         l.setJustificationType (juce::Justification::centredLeft);
         addAndMakeVisible (l);
@@ -162,28 +163,29 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
 
     analysisLabel.setColour (juce::Label::textColourId, ui::colours::textPrimary);
     analysisLabel.setJustificationType (juce::Justification::topLeft);
-    analysisLabel.setFont (juce::FontOptions (12.0f));
-    analysisLabel.setMinimumHorizontalScale (0.8f);
+    analysisLabel.setFont (juce::FontOptions (16.0f));
+    analysisLabel.setMinimumHorizontalScale (0.75f);
     addAndMakeVisible (analysisLabel);
 
     generateLabel.setColour (juce::Label::textColourId, ui::colours::accent);
-    generateLabel.setJustificationType (juce::Justification::centredLeft);
-    generateLabel.setFont (juce::FontOptions (12.0f));
-    generateLabel.setMinimumHorizontalScale (0.8f);
+    generateLabel.setJustificationType (juce::Justification::topLeft);
+    generateLabel.setFont (juce::FontOptions (16.0f));
+    generateLabel.setMinimumHorizontalScale (0.75f);
     addAndMakeVisible (generateLabel);
 
     sidechainLabel.setJustificationType (juce::Justification::centredRight);
-    sidechainLabel.setFont (juce::FontOptions (11.0f));
+    sidechainLabel.setFont (juce::FontOptions (16.0f, juce::Font::bold));
     addAndMakeVisible (sidechainLabel);
 
     bankLabel.setJustificationType (juce::Justification::centredLeft);
-    bankLabel.setFont (juce::FontOptions (11.0f));
+    bankLabel.setFont (juce::FontOptions (13.0f));
     addAndMakeVisible (bankLabel);
 
     addAndMakeVisible (preview);
 
     statusLabel.setColour (juce::Label::textColourId, ui::colours::textSecondary);
     statusLabel.setJustificationType (juce::Justification::centredRight);
+    statusLabel.setFont (juce::FontOptions (16.0f));
     addAndMakeVisible (statusLabel);
 
     addAndMakeVisible (dragSource);
@@ -191,7 +193,7 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     timerCallback();
     startTimerHz (10);
 
-    setSize (600, 540);
+    setSize (780, 720);
 }
 
 KemuriBassEditor::~KemuriBassEditor()
@@ -224,11 +226,14 @@ void KemuriBassEditor::timerCallback()
     analysisLabel.setText (processorRef.getAnalysisSummary(), juce::dontSendNotification);
     generateLabel.setText (processorRef.getGenerateSummary(), juce::dontSendNotification);
 
-    const bool rx = processorRef.isSidechainReceiving();
-    sidechainLabel.setText (juce::String::fromUTF8 (rx ? "\xE2\x97\x8F \xE3\x83\x8D\xE3\x82\xBF\xE5\x8F\x97\xE4\xBF\xA1\xE4\xB8\xAD"      // ● ネタ受信中
-                                                       : "\xE2\x97\x8B \xE3\x83\x8D\xE3\x82\xBF\xE6\x9C\xAA\xE6\x8E\xA5\xE7\xB6\x9A"),    // ○ ネタ未接続
-                            juce::dontSendNotification);
-    sidechainLabel.setColour (juce::Label::textColourId, rx ? ui::colours::accent : ui::colours::textSecondary);
+    // サイドチェインの 3 状態: 無効 / 有効だが無音 / 受信中
+    const int sc = processorRef.getSidechainState();
+    const char* scText = sc == 2 ? "\xE2\x97\x8F \xE3\x83\x8D\xE3\x82\xBF\xE5\x8F\x97\xE4\xBF\xA1\xE4\xB8\xAD"                                   // ● ネタ受信中
+                       : sc == 1 ? "\xE2\x97\x8B \xE3\x82\xB5\xE3\x82\xA4\xE3\x83\x89\xE3\x83\x81\xE3\x82\xA7\xE3\x82\xA4\xE3\x83\xB3\xE7\x84\xA1\xE9\x9F\xB3"  // ○ サイドチェイン無音
+                                 : "\xE2\x97\x8B \xE3\x82\xB5\xE3\x82\xA4\xE3\x83\x89\xE3\x83\x81\xE3\x82\xA7\xE3\x82\xA4\xE3\x83\xB3\xE7\x84\xA1\xE5\x8A\xB9"; // ○ サイドチェイン無効
+    sidechainLabel.setText (juce::String::fromUTF8 (scText), juce::dontSendNotification);
+    sidechainLabel.setColour (juce::Label::textColourId,
+                              sc == 2 ? ui::colours::accent : juce::Colour (0xffd08a3d));
 
     bankLabel.setText (processorRef.getBankStatus(), juce::dontSendNotification);
     bankLabel.setColour (juce::Label::textColourId,
@@ -298,59 +303,61 @@ void KemuriBassEditor::paint (juce::Graphics& g)
 
 void KemuriBassEditor::resized()
 {
-    auto area = getLocalBounds().reduced (16);
+    auto area = getLocalBounds().reduced (18);
 
-    auto header = area.removeFromTop (40);
-    titleLabel.setBounds (header.removeFromLeft (220));
-    analyzeButton.setBounds (header.removeFromRight (110).reduced (0, 4));
-    header.removeFromRight (8);
-    sidechainLabel.setBounds (header.removeFromRight (140));
+    auto header = area.removeFromTop (48);
+    titleLabel.setBounds (header.removeFromLeft (240));
+    analyzeButton.setBounds (header.removeFromRight (140).reduced (0, 4));
+    header.removeFromRight (12);
+    sidechainLabel.setBounds (header.removeFromRight (240));
 
-    area.removeFromTop (8);
+    area.removeFromTop (10);
 
     // 上段: Style / Key / Mode / Bars（キャプション + コンボ）
-    auto row = area.removeFromTop (64);
-    auto cell = [&row] (int w) { auto c = row.removeFromLeft (w); row.removeFromLeft (10); return c; };
+    auto row = area.removeFromTop (60);
+    auto cell = [&row] (int w) { auto c = row.removeFromLeft (w); row.removeFromLeft (14); return c; };
 
     auto placeCombo = [] (juce::Rectangle<int> c, juce::Label& cap, juce::ComboBox& box)
     {
-        cap.setBounds (c.removeFromTop (16));
-        box.setBounds (c.removeFromTop (28));
+        cap.setBounds (c.removeFromTop (22));
+        box.setBounds (c.removeFromTop (34));
     };
-    placeCombo (cell (180), styleLabel, styleBox);
-    placeCombo (cell (90),  keyLabel,   keyBox);
-    placeCombo (cell (110), modeLabel,  modeBox);
-    placeCombo (cell (80),  barsLabel,  barsBox);
+    placeCombo (cell (240), styleLabel, styleBox);
+    placeCombo (cell (120), keyLabel,   keyBox);
+    placeCombo (cell (150), modeLabel,  modeBox);
+    placeCombo (cell (110), barsLabel,  barsBox);
 
-    area.removeFromTop (16);
+    area.removeFromTop (12);
 
     // 中段: Complexity / Fill ノブ
-    auto knobs = area.removeFromTop (110);
-    auto knobCell = [&knobs] () { auto c = knobs.removeFromLeft (100); knobs.removeFromLeft (16); return c; };
+    auto knobs = area.removeFromTop (120);
+    auto knobCell = [&knobs] () { auto c = knobs.removeFromLeft (120); knobs.removeFromLeft (20); return c; };
     auto placeKnob = [] (juce::Rectangle<int> c, juce::Label& cap, juce::Slider& s)
     {
-        cap.setBounds (c.removeFromTop (16));
+        cap.setBounds (c.removeFromTop (22));
         s.setBounds (c);
     };
     placeKnob (knobCell(), complexityLabel, complexitySlider);
     placeKnob (knobCell(), fillLabel,       fillSlider);
 
-    // 解析サマリ（ネタ / キック の 2 行）+ 生成のアプローチ + 学習パターン状態
-    area.removeFromTop (8);
-    analysisLabel.setBounds (area.removeFromTop (34));
-    generateLabel.setBounds (area.removeFromTop (18));
-    bankLabel.setBounds (area.removeFromTop (16));
-
-    // ピアノロールプレビュー
-    area.removeFromTop (6);
-    preview.setBounds (area.removeFromTop (100));
+    // 解析サマリ（ネタ / キック の 2 行）+ 生成（警告含め最大 2 行）+ 学習パターン状態
+    area.removeFromTop (10);
+    analysisLabel.setBounds (area.removeFromTop (46));
+    area.removeFromTop (4);
+    generateLabel.setBounds (area.removeFromTop (44));
+    bankLabel.setBounds (area.removeFromTop (20));
 
     // 下段: Generate / status / drag
-    auto footer = area.removeFromBottom (48);
-    generateButton.setBounds (footer.removeFromLeft (120).reduced (0, 8));
-    footer.removeFromLeft (12);
-    dragSource.setBounds (footer.removeFromRight (140).reduced (0, 6));
+    auto footer = area.removeFromBottom (58);
+    generateButton.setBounds (footer.removeFromLeft (150).reduced (0, 8));
+    footer.removeFromLeft (14);
+    dragSource.setBounds (footer.removeFromRight (180).reduced (0, 6));
     statusLabel.setBounds (footer.reduced (4, 0));
+
+    // ピアノロールプレビュー（残り全部）
+    area.removeFromTop (8);
+    area.removeFromBottom (8);
+    preview.setBounds (area);
 }
 
 } // namespace kemuri

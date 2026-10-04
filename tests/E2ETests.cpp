@@ -163,6 +163,59 @@ void runScenario (double startBar, int style, const char* name)
     proc.releaseResources();
     proc.setPlayHead (nullptr);
 }
+
+// 接続ミスの診断: サイドチェイン無効 + MIDI From がネタ（パッド D#3 = 63 で鳴るチョップ）
+void runMisroutedScenario()
+{
+    std::printf ("\n[misrouted] sidechain disabled, MIDI input = neta chops (D#3)\n");
+
+    KemuriBassProcessor proc;
+    if (auto* sc = proc.getBus (true, 1)) sc->enable (false);
+    FakePlayHead ph;
+    proc.setPlayHead (&ph);
+    const double sr = 44100.0;
+    const int bs = 512;
+    proc.setRateAndBufferSizeDetails (sr, bs);
+    proc.prepareToPlay (sr, bs);
+
+    juce::AudioBuffer<float> buf (std::max (2, proc.getTotalNumInputChannels()), bs);
+    juce::MidiBuffer midi;
+    const double bps = (ph.bpm / 60.0) / sr;
+    const long total = static_cast<long> (8 * 4.0 / bps);
+    for (long s = 0; s < total; s += bs)
+    {
+        buf.clear(); midi.clear();
+        const double blockPpq = s * bps;
+        ph.ppq = blockPpq;
+        const double blockEnd = blockPpq + bs * bps;
+        for (int bar = 0; bar < 8; ++bar)
+            for (double p : { 0.0, 2.5 })
+            {
+                const double at = bar * 4.0 + p;
+                if (at >= blockPpq && at < blockEnd)
+                    midi.addEvent (juce::MidiMessage::noteOn (1, 63, static_cast<juce::uint8> (100)),
+                                   std::clamp (static_cast<int> ((at - blockPpq) / bps), 0, bs - 1));
+            }
+        proc.processBlock (buf, midi);
+    }
+    expect (proc.getSidechainState() == 0, "sidechain state = disabled");
+
+    proc.requestAnalyze();
+    const auto summary = proc.getAnalysisSummary();
+    std::printf ("  summary:\n%s\n", summary.toRawUTF8());
+    expect (summary.contains (juce::String::fromUTF8 ("\xE3\x82\xB5\xE3\x82\xA4\xE3\x83\x89\xE3\x83\x81\xE3\x82\xA7\xE3\x82\xA4\xE3\x83\xB3\xE3\x81\x8C\xE7\x84\xA1\xE5\x8A\xB9")),
+            "explains: sidechain disabled");
+    expect (summary.contains ("D#3") && summary.contains ("MIDI From"), "warns: D#3 is not a kick, check MIDI From");
+
+    proc.requestGenerate();
+    const auto gen = proc.getGenerateSummary();
+    std::printf ("  %s\n", gen.toRawUTF8());
+    expect (gen.contains (juce::String::fromUTF8 ("\xE3\x83\x8D\xE3\x82\xBF\xE6\x9C\xAA\xE8\xA7\xA3\xE6\x9E\x90")),
+            "warns when generating without neta");
+
+    proc.releaseResources();
+    proc.setPlayHead (nullptr);
+}
 } // namespace
 
 int main()
@@ -172,6 +225,7 @@ int main()
     runScenario (5.0, 1, "Premier from bar 5 (phase)");
     runScenario (0.0, 4, "Pete Rock");
     runScenario (0.0, 3, "9th Wonder");
+    runMisroutedScenario();
     std::printf ("\n%s (%d failures)\n", failures == 0 ? "E2E PASS" : "E2E FAILURES", failures);
     return failures == 0 ? 0 : 1;
 }

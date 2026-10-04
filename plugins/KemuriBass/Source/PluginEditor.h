@@ -24,15 +24,18 @@ private:
     bool dragging = false;
 };
 
-// 生成結果のピアノロールプレビュー（M4 UI 仕上げ）。
+// 生成結果のピアノロールプレビュー。下端にあなたのキック位置を表示する（v2:
+// ベースがキックと一緒に鳴っているかを目で確認できる）。
 class PianoRollPreview : public juce::Component
 {
 public:
-    void setSequence (std::vector<kemuri::core::OutNote> notes, double lengthBeats);
+    void setSequence (std::vector<kemuri::core::OutNote> notes, double lengthBeats,
+                      std::vector<double> kickBeats);
     void paint (juce::Graphics&) override;
 
 private:
     std::vector<kemuri::core::OutNote> notes;
+    std::vector<double> kicks;
     double lengthBeats = 0.0;
 };
 
@@ -74,7 +77,9 @@ private:
     juce::TextButton generateButton { "Generate" };
     juce::TextButton analyzeButton  { "Analyze" };
     juce::Label      statusLabel;
-    juce::Label      analysisLabel;
+    juce::Label      analysisLabel;   // ネタ / キック（2 行）
+    juce::Label      generateLabel;   // 生成のアプローチ
+    juce::Label      sidechainLabel;  // サイドチェイン受信ランプ
     juce::Label      bankLabel;
     PianoRollPreview preview;
     MidiDragSource   dragSource { processorRef };

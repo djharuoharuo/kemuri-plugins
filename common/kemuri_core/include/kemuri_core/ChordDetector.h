@@ -91,16 +91,22 @@ inline std::vector<ChordSeg> detectProgression (const std::vector<RawNote>& note
 // フラッピング（例: G#m↔Gm）を抑え、検出キーのダイアトニック和音へ弱い事前分布を
 // かける。遷移は学習しない（短いループでの過学習を避ける）。
 // 空セグメントは一様 emission → stay bias により前和音を自然に継承する。
-inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote>& notes,
-                                                       double clipLenBeats,
-                                                       double segBeats,
-                                                       int keyRoot,
-                                                       int keyMode)
+// v2: セグメント毎のピッチクラス強度（MIDI ノートの音価でも、オーディオのクロマでも可）
+// から Viterbi で和音系列を求める共通実装。segHas=false のセグメントは無音扱い
+// （一様 emission → 前和音を継承）。
+// segBassPc（任意）: セグメントで実際に鳴っているベース音のピッチクラス（-1=不明）。
+// ブームバップではサンプルのベース ≒ 和音のルートなので、ルートの強い証拠として使う
+// （Am と F のように構成音が 2 つ重なる和音を倍音の多い実音でも取り違えないため）。
+inline std::vector<ChordSeg> viterbiChordsFromPch (const std::vector<std::array<double, 12>>& segPch,
+                                                   const std::vector<bool>& segHas,
+                                                   double segBeats,
+                                                   int keyRoot,
+                                                   int keyMode,
+                                                   const std::vector<int>& segBassPc = {})
 {
     std::vector<ChordSeg> result;
-    if (notes.empty()) return result;
-
-    const int numSeg  = std::max (1, static_cast<int> (std::lround (clipLenBeats / segBeats)));
+    const int numSeg  = static_cast<int> (segPch.size());
+    if (numSeg == 0) return result;
     constexpr int nSt = 24;   // state = root * 2 + (0=maj, 1=min)
 
     // ダイアトニック事前分布: キーのスケール上の三和音に加点
@@ -124,33 +130,19 @@ inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote
 
     // emission（log スコア、セグメント毎に最大値で正規化）
     // v1.5: セブンス系テンプレートを追加し、quality へは dom7/maj7→maj, m7→min と
-    // マップ（状態数は 24 のまま）。pch は音価重み + 低音バイアス（ベース寄りの音ほど
-    // root の証拠として強い — 相対長短調の曖昧さ Am7 vs C の解消に効く）。
+    // マップ（状態数は 24 のまま）。
     std::vector<std::array<double, nSt>> em (static_cast<size_t> (numSeg));
-    std::vector<bool> segHasNotes (static_cast<size_t> (numSeg), false);
     for (int s = 0; s < numSeg; ++s)
     {
-        const double sStart = s * segBeats;
-        const double sEnd   = sStart + segBeats;
-        std::array<double, 12> pch {};
-        for (const auto& n : notes)
-        {
-            const double nStart = std::max (n.start, sStart);
-            const double nEnd   = std::min (n.start + n.duration, sEnd);
-            if (nEnd > nStart)
-            {
-                const double lowBias = 1.0 + std::max (0, 60 - n.pitch) * 0.01;   // C4 以下を漸増強調
-                pch[static_cast<size_t> (((n.pitch % 12) + 12) % 12)] += (nEnd - nStart) * lowBias;
-                segHasNotes[static_cast<size_t> (s)] = true;
-            }
-        }
-
+        const auto& pch = segPch[static_cast<size_t> (s)];
         auto& e = em[static_cast<size_t> (s)];
-        if (! segHasNotes[static_cast<size_t> (s)])
+        if (! segHas[static_cast<size_t> (s)])
         {
             e.fill (0.0);   // 一様 → stay bias が前和音を維持
             continue;
         }
+        double maxPch = 0.0;
+        for (double v : pch) maxPch = std::max (maxPch, v);
 
         // quality ごとのテンプレート族（maj: triad/dom7/maj7、min: triad/m7）
         static constexpr std::array<const std::array<double, 12>*, 3> majFam {
@@ -175,10 +167,11 @@ inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote
             double minBest = 0.0;
             for (const auto* t : minFam) minBest = std::max (minBest, famScore (*t, r));
 
-            // ルート不在ペナルティ: ルート音が鳴っていない候補は減点。
+            // ルート不在ペナルティ: ルート音が（ほぼ）鳴っていない候補は減点。
             // 7th テンプレートは部分集合の重なりが大きく（C-E-G は Am7 の 3/4）、
             // これが無いと相対長短調へ誤った吸着が起きる。ルートは最重要証拠。
-            if (pch[static_cast<size_t> (r)] <= 0.0)
+            // オーディオのクロマはノイズで厳密に 0 にならないため相対しきい値。
+            if (pch[static_cast<size_t> (r)] <= 0.08 * maxPch)
             {
                 majBest *= 0.75;
                 minBest *= 0.75;
@@ -193,6 +186,21 @@ inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote
         // （純三和音の C→Am は切替わり、~95% の僅差フラッピングは抑止）。
         for (int st = 0; st < nSt; ++st)
             e[static_cast<size_t> (st)] = 4.0 * std::log (raw[static_cast<size_t> (st)] / maxSc + 1e-6);
+
+        // ベース音のルート証拠（v2）
+        const int bpc = (static_cast<size_t> (s) < segBassPc.size()) ? segBassPc[static_cast<size_t> (s)] : -1;
+        if (bpc >= 0)
+        {
+            for (int st = 0; st < nSt; ++st)
+            {
+                const int r = st / 2;
+                const bool minor = (st % 2) == 1;
+                const int rel = ((bpc - r) % 12 + 12) % 12;
+                if (rel == 0)                                   e[static_cast<size_t> (st)] += 1.2;   // ベース = ルート
+                else if (rel == (minor ? 3 : 4) || rel == 7)    e[static_cast<size_t> (st)] += 0.2;   // 転回形
+                else                                            e[static_cast<size_t> (st)] -= 0.4;   // 和音外
+            }
+        }
     }
 
     // Viterbi（自己遷移 0、切替ペナルティ 0.5 log 単位）
@@ -245,6 +253,39 @@ inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote
         result.push_back ({ s * segBeats, segBeats, st / 2, (st % 2 == 0) ? "maj" : "min" });
     }
     return result;
+}
+
+// MIDI ノート列からの Viterbi コード検出（v1.2〜）。pch は音価重み + 低音バイアス
+// （ベース寄りの音ほど root の証拠として強い — Am7 vs C の解消に効く）。
+inline std::vector<ChordSeg> detectProgressionViterbi (const std::vector<RawNote>& notes,
+                                                       double clipLenBeats,
+                                                       double segBeats,
+                                                       int keyRoot,
+                                                       int keyMode)
+{
+    if (notes.empty()) return {};
+    const int numSeg = std::max (1, static_cast<int> (std::lround (clipLenBeats / segBeats)));
+
+    std::vector<std::array<double, 12>> segPch (static_cast<size_t> (numSeg));
+    std::vector<bool> segHas (static_cast<size_t> (numSeg), false);
+    for (int s = 0; s < numSeg; ++s)
+    {
+        const double sStart = s * segBeats;
+        const double sEnd   = sStart + segBeats;
+        for (const auto& n : notes)
+        {
+            const double nStart = std::max (n.start, sStart);
+            const double nEnd   = std::min (n.start + n.duration, sEnd);
+            if (nEnd > nStart)
+            {
+                const double lowBias = 1.0 + std::max (0, 60 - n.pitch) * 0.01;   // C4 以下を漸増強調
+                segPch[static_cast<size_t> (s)][static_cast<size_t> (((n.pitch % 12) + 12) % 12)]
+                    += (nEnd - nStart) * lowBias;
+                segHas[static_cast<size_t> (s)] = true;
+            }
+        }
+    }
+    return viterbiChordsFromPch (segPch, segHas, segBeats, keyRoot, keyMode);
 }
 
 } // namespace kemuri::core

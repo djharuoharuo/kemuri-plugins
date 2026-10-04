@@ -42,9 +42,11 @@ void MidiDragSource::mouseDrag (const juce::MouseEvent&)
 }
 
 // ── PianoRollPreview ────────────────────────────────────────────────
-void PianoRollPreview::setSequence (std::vector<kemuri::core::OutNote> n, double len)
+void PianoRollPreview::setSequence (std::vector<kemuri::core::OutNote> n, double len,
+                                    std::vector<double> kickBeats)
 {
     notes       = std::move (n);
+    kicks       = std::move (kickBeats);
     lengthBeats = len;
     repaint();
 }
@@ -86,6 +88,14 @@ void PianoRollPreview::paint (juce::Graphics& g)
         const float y  = b.getBottom() - pad - (pc - lo + 1) * rowH;
         g.setColour (ui::colours::accent);
         g.fillRoundedRectangle (x + 0.5f, y, w, juce::jmax (2.0f, rowH - 1.0f), 2.0f);
+    }
+
+    // あなたのキック位置（下端のマーカー）
+    g.setColour (ui::colours::textPrimary.withAlpha (0.55f));
+    for (double k : kicks)
+    {
+        const float x = b.getX() + b.getWidth() * (float) (k / lengthBeats);
+        g.fillRect (x, b.getBottom() - 4.0f, 2.0f, 4.0f);
     }
 }
 
@@ -151,9 +161,20 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     addAndMakeVisible (analyzeButton);
 
     analysisLabel.setColour (juce::Label::textColourId, ui::colours::textPrimary);
-    analysisLabel.setJustificationType (juce::Justification::centredLeft);
+    analysisLabel.setJustificationType (juce::Justification::topLeft);
     analysisLabel.setFont (juce::FontOptions (12.0f));
+    analysisLabel.setMinimumHorizontalScale (0.8f);
     addAndMakeVisible (analysisLabel);
+
+    generateLabel.setColour (juce::Label::textColourId, ui::colours::accent);
+    generateLabel.setJustificationType (juce::Justification::centredLeft);
+    generateLabel.setFont (juce::FontOptions (12.0f));
+    generateLabel.setMinimumHorizontalScale (0.8f);
+    addAndMakeVisible (generateLabel);
+
+    sidechainLabel.setJustificationType (juce::Justification::centredRight);
+    sidechainLabel.setFont (juce::FontOptions (11.0f));
+    addAndMakeVisible (sidechainLabel);
 
     bankLabel.setJustificationType (juce::Justification::centredLeft);
     bankLabel.setFont (juce::FontOptions (11.0f));
@@ -170,7 +191,7 @@ KemuriBassEditor::KemuriBassEditor (KemuriBassProcessor& p)
     timerCallback();
     startTimerHz (10);
 
-    setSize (560, 500);
+    setSize (600, 540);
 }
 
 KemuriBassEditor::~KemuriBassEditor()
@@ -201,13 +222,21 @@ void KemuriBassEditor::timerCallback()
                                : juce::String (n) + " notes ready",
                          juce::dontSendNotification);
     analysisLabel.setText (processorRef.getAnalysisSummary(), juce::dontSendNotification);
+    generateLabel.setText (processorRef.getGenerateSummary(), juce::dontSendNotification);
+
+    const bool rx = processorRef.isSidechainReceiving();
+    sidechainLabel.setText (juce::String::fromUTF8 (rx ? "\xE2\x97\x8F \xE3\x83\x8D\xE3\x82\xBF\xE5\x8F\x97\xE4\xBF\xA1\xE4\xB8\xAD"      // ● ネタ受信中
+                                                       : "\xE2\x97\x8B \xE3\x83\x8D\xE3\x82\xBF\xE6\x9C\xAA\xE6\x8E\xA5\xE7\xB6\x9A"),    // ○ ネタ未接続
+                            juce::dontSendNotification);
+    sidechainLabel.setColour (juce::Label::textColourId, rx ? ui::colours::accent : ui::colours::textSecondary);
 
     bankLabel.setText (processorRef.getBankStatus(), juce::dontSendNotification);
     bankLabel.setColour (juce::Label::textColourId,
                          processorRef.hasBankWarning() ? juce::Colour (0xffd08a3d)
                                                        : ui::colours::textSecondary);
 
-    preview.setSequence (processorRef.getPreviewNotes(), processorRef.getPreviewLengthBeats());
+    preview.setSequence (processorRef.getPreviewNotes(), processorRef.getPreviewLengthBeats(),
+                         processorRef.getPreviewKicks());
 }
 
 // ── File drag-in analyze ────────────────────────────────────────────
@@ -274,6 +303,8 @@ void KemuriBassEditor::resized()
     auto header = area.removeFromTop (40);
     titleLabel.setBounds (header.removeFromLeft (220));
     analyzeButton.setBounds (header.removeFromRight (110).reduced (0, 4));
+    header.removeFromRight (8);
+    sidechainLabel.setBounds (header.removeFromRight (140));
 
     area.removeFromTop (8);
 
@@ -304,9 +335,10 @@ void KemuriBassEditor::resized()
     placeKnob (knobCell(), complexityLabel, complexitySlider);
     placeKnob (knobCell(), fillLabel,       fillSlider);
 
-    // 解析サマリ + 学習パターン状態
+    // 解析サマリ（ネタ / キック の 2 行）+ 生成のアプローチ + 学習パターン状態
     area.removeFromTop (8);
-    analysisLabel.setBounds (area.removeFromTop (20));
+    analysisLabel.setBounds (area.removeFromTop (34));
+    generateLabel.setBounds (area.removeFromTop (18));
     bankLabel.setBounds (area.removeFromTop (16));
 
     // ピアノロールプレビュー

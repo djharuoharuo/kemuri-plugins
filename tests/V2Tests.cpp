@@ -156,6 +156,32 @@ int run()
         expect (k.hasSwing && std::abs (k.swingPercent - 58) <= 1, "swing ~58%");
     }
 
+    // 実機（2026-10-04）: 解析区間 16 小節のうちドラムが届いたのは後半だけ、しかも最後の小節は
+    // Analyze を押した時点で途中まで。2 小節パターン A = 0/1.5/2.6、B = 0/0.5/1.5/2.6/3.4。
+    std::printf ("[F] ドラムが途中から届いた + 最後の小節が途中まで\n");
+    {
+        std::vector<RawEvent> ev;
+        for (int bar = 9; bar <= 16; ++bar)
+        {
+            const double b0 = bar * 4.0;
+            const auto& pat = (bar % 2 == 0) ? std::vector<double> { 0.0, 1.5, 2.6 } : std::vector<double> { 0.0, 0.5, 1.5, 2.6, 3.4 };
+            for (double k : pat)
+            {
+                if (bar == 16 && k > 0.2) break;   // 最後の小節は 1 拍目だけ届いた
+                ev.push_back ({ b0 + k, 36, true }); ev.push_back ({ b0 + k + 0.1, 36, false });
+            }
+            if (bar < 16) for (double sn : { 1.0, 3.0 }) { ev.push_back ({ b0 + sn, 38, true }); ev.push_back ({ b0 + sn + 0.1, 38, false }); }
+        }
+        std::sort (ev.begin(), ev.end(), [] (const RawEvent& x, const RawEvent& y) { return x.ppq < y.ppq; });
+        const auto k = analyzeKick (ev, 1, 17);
+        std::printf ("  loop=%d", k.loopBars);
+        for (size_t i = 0; i < k.bars.size(); ++i) { std::printf (" | slot%zu:", i); for (double p : k.bars[i]) std::printf (" %.2f", p); }
+        std::printf ("\n");
+        bool full = k.ok && k.loopBars == 2 && k.bars.size() == 2;
+        if (full) full = k.bars[0].size() == 3 && k.bars[1].size() == 5;   // ソング小節偶数 = A, 奇数 = B
+        expect (full, "loop 2 bars, both slots = the full patterns (no empty / partial bars)");
+    }
+
     std::printf ("\n%s (%d failures)\n", failures == 0 ? "ALL PASS" : "FAILURES", failures);
     return failures == 0 ? 0 : 1;
 }
@@ -249,11 +275,12 @@ int run()
                 ++kicks;
                 for (const auto& n : r.notes) if (std::abs (n.start - (b * 4 + kp)) < 0.13) { ++onKick; break; }
             }
-        expect (onKick * 100 / kicks >= 80, "キック位置にベース " + std::to_string (onKick) + "/" + std::to_string (kicks));
+        const int needPct = (style == 3) ? 50 : 80;   // 9th は 1 拍目・和音の変化・後半 1 回だけ弾き直す
+        expect (onKick * 100 / kicks >= needPct, "キック位置にベース " + std::to_string (onKick) + "/" + std::to_string (kicks));
 
         // 4) 音域 E1..G2
-        bool reg = true; for (const auto& n : r.notes) if (n.pitch < 28 || n.pitch > 43) reg = false;
-        expect (reg, "音域 E1..G2");
+        bool reg = true; for (const auto& n : r.notes) if (n.pitch < 28 || n.pitch > 40) reg = false;
+        expect (reg, "音域 E1..E2（高い音なし）");
 
         // 5) ループが毎回同じ（フレーズ端でない bar0 と bar2）
         auto barSig = [&r] (int b) { std::string s; for (const auto& n : r.notes) if (n.start >= b * 4 && n.start < b * 4 + 4) s += std::to_string (n.pitch) + "@" + std::to_string (std::lround ((n.start - b * 4) * 100)) + " "; return s; };
@@ -261,18 +288,69 @@ int run()
 
         // 6) 密度
         const double npb = static_cast<double> (r.notes.size()) / r.bars;
-        const double hi = (style == 4) ? 8.0 : (style == 2 ? 7.0 : 5.0);
-        expect (npb >= 1.5 && npb <= hi, "密度 " + std::to_string (npb).substr (0, 4) + " 音/小節");
+        expect (npb >= 1.5 && npb <= 4.0, "密度 " + std::to_string (npb).substr (0, 4) + " 音/小節（ブームバップ 2〜4）");
+        bool perBarOk = true;
+        for (int b = 0; b < r.bars; ++b)
+        {
+            int cnt = 0;
+            for (const auto& n : r.notes) if (n.start >= b * 4 && n.start < b * 4 + 4) ++cnt;
+            if (cnt > 4 + ((b % 4 == 3) ? 1 : 0)) perBarOk = false;   // フレーズの最後だけ経過音 +1 まで
+        }
+        expect (perBarOk, "どの小節も 4 音まで（フレーズの最後は +1）");
+
+        // 7) Complexity 30 では、フレーズの最後以外はすべてその時の和音のルート
+        bool allRoots = true;
+        for (const auto& n : r.notes)
+        {
+            const int bar = static_cast<int> (n.start / 4.0);
+            if (bar % 4 == 3) continue;
+            if (n.pitch % 12 != ((bar % 2 == 0) ? 9 : 5)) allRoots = false;
+        }
+        expect (allRoots, "フレーズの最後以外はルートだけ（音程が跳ねない）");
     }
 
-    // 7) Premier: サンプルのベースを verbatim でなぞる（ベースのある小節ではそのまま）
-    std::printf ("\n=== Premier verbatim / サンプルにベースが無い場合 ===\n");
+    // 8) サンプルにベースが無いネタでも同じ（ルートだけ）
+    std::printf ("\n=== サンプルにベースが無い場合 ===\n");
     {
         Rng rng (77u);
         V2Config cfg; cfg.style = 1; cfg.harmony = &Hn; cfg.kick = &K; cfg.complexity = 30;
         const auto r = buildBassV2 (cfg, rng);
         dump (r, 2);
-        expect (! r.usedSampleBass, "ベース無しのネタでは和音ルートにフォールバック");
+        bool ok = ! r.notes.empty();
+        for (const auto& n : r.notes)
+            if (static_cast<int> (n.start / 4.0) < 3 && n.pitch % 12 != ((static_cast<int> (n.start / 4.0) % 2 == 0) ? 9 : 5)) ok = false;
+        expect (ok, "ベース無しのネタでも和音のルート");
+    }
+
+    // 9) 実機のケース（2026-10-04 の Live）: G#m/D# | G#m/A#m、キック 1・2 の裏・3 の裏 / 1・1 の裏・2 の裏・3 の裏・4 の裏
+    std::printf ("\n=== 実機ケース G#m/D# | G#m/A#m ===\n");
+    {
+        HarmonyAnalysis h;
+        h.ok = true; h.keyRoot = 8; h.keyMode = 1; h.loopBars = 2;
+        h.halfBar = { { 0, 2, 8, "min" }, { 2, 2, 3, "maj" }, { 4, 2, 8, "min" }, { 6, 2, 10, "min" } };
+        h.perBar  = { { 0, 4, 8, "min" }, { 4, 4, 8, "min" } };
+        h.bassMidi.assign (32, -1);
+        KickAnalysis k; k.ok = true; k.kickNote = 36; k.loopBars = 2;
+        k.bars = { { 0.0, 1.5, 2.6 }, { 0.0, 0.5, 1.5, 2.6, 3.4 } };
+        for (int style : { 4, 1, 3, 2 })
+        {
+            Rng rng (2026u + style);
+            V2Config cfg; cfg.style = style; cfg.bars = 8; cfg.complexity = 30; cfg.fill = 20;
+            cfg.harmony = &h; cfg.kick = &k;
+            const auto r = buildBassV2 (cfg, rng);
+            dump (r, 4);
+            const double npb = static_cast<double> (r.notes.size()) / r.bars;
+            int distinctMax = 0;
+            for (int b = 0; b < r.bars; ++b)
+            {
+                if (b % 4 == 3) continue;
+                std::set<int> ps;
+                for (const auto& n : r.notes) if (n.start >= b * 4 && n.start < b * 4 + 4) ps.insert (n.pitch);
+                distinctMax = std::max (distinctMax, static_cast<int> (ps.size()));
+            }
+            expect (npb <= 4.0, std::string (producerName (r.producer)) + ": " + std::to_string (npb).substr (0, 4) + " 音/小節");
+            expect (distinctMax <= 2, std::string (producerName (r.producer)) + ": 1 小節の音程は和音の数（2）まで");
+        }
     }
 
     // 8) 多様性: 同じネタ・同じキックで 50 回生成 → アプローチ/音形の種類

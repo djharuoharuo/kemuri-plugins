@@ -37,6 +37,26 @@ inline KickAnalysis analyzeKick (const std::vector<RawEvent>& events, long first
     KickAnalysis r;
     if (endBar <= firstBar) return r;
 
+    // ドラムが実際に届いていた小節だけを使う（v2.1）: 区間の末尾から遡って、何かしら
+    // ノートオンがある小節が続く範囲。MIDI From を途中で切り替えた・取り込み開始前の小節が
+    // 空のまま混ざると、ループ長を誤ってキックの無い小節ができる（実機で 8 小節中 3 小節が空）。
+    {
+        std::vector<char> active (static_cast<size_t> (endBar - firstBar), 0);
+        for (const auto& e : events)
+        {
+            if (! e.isOn) continue;
+            const long b = static_cast<long> (std::floor (e.ppq / 4.0 + 1e-9));
+            if (b >= firstBar && b < endBar) active[static_cast<size_t> (b - firstBar)] = 1;
+        }
+        long last = endBar - 1;
+        while (last >= firstBar && ! active[static_cast<size_t> (last - firstBar)]) --last;
+        if (last < firstBar) return r;
+        long first = last;
+        while (first - 1 >= firstBar && active[static_cast<size_t> (first - 1 - firstBar)]) --first;
+        firstBar = first;
+        endBar   = last + 1;
+    }
+
     // キックのノート番号を推定:
     //  - 小節頭（1 拍目）に来る割合を最重視
     //  - 打点が密すぎる（ハイハット等, 1 小節 6 打超）ものは大きく減点
@@ -117,12 +137,24 @@ inline KickAnalysis analyzeKick (const std::vector<RawEvent>& events, long first
     if (L == 0) { L = 1; while (L * 2 <= std::min (numBars, 8)) L *= 2; }
     r.loopBars = L;
 
-    // 位相合わせ: ループ内位置 i ごとに、最新の出現小節の実位置を採用
+    // 位相合わせ: ループ内位置 i ごとに、いちばん多く出てくる打ち方（同数なら新しい方）の
+    // 実位置を採用。Analyze を押した瞬間の途中までしか届いていない小節や、たまのフィルに
+    // 引っ張られない（v2.1）。
     r.bars.assign (static_cast<size_t> (L), {});
     for (int i = 0; i < L; ++i)
+    {
+        int bestBar = -1, bestCount = 0;
         for (int b = numBars - 1; b >= 0; --b)
-            if (static_cast<int> ((((firstBar + b) % L) + L) % L) == i && ! perBar[static_cast<size_t> (b)].empty())
-            { r.bars[static_cast<size_t> (i)] = perBar[static_cast<size_t> (b)]; break; }
+        {
+            if (static_cast<int> ((((firstBar + b) % L) + L) % L) != i || perBar[static_cast<size_t> (b)].empty()) continue;
+            const auto sig = stepSet (perBar[static_cast<size_t> (b)]);
+            int count = 0;
+            for (int o = 0; o < numBars; ++o)
+                if (static_cast<int> ((((firstBar + o) % L) + L) % L) == i && stepSet (perBar[static_cast<size_t> (o)]) == sig) ++count;
+            if (count > bestCount) { bestCount = count; bestBar = b; }   // b は新しい順 → 同数なら新しい方
+        }
+        if (bestBar >= 0) r.bars[static_cast<size_t> (i)] = perBar[static_cast<size_t> (bestBar)];
+    }
 
     // スイング: ドラム全体（ハット含む）の 16 分オフビートの遅れから推定
     std::vector<double> samples;

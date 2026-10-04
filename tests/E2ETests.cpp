@@ -187,7 +187,8 @@ void runScenario (double startBar, int style, const char* name, DrumSource drumS
     int onKick = 0;
     for (double k : { 0.0, 1.75, 2.5, 4.0, 5.75, 6.5 })
         for (const auto& n : notes) if (std::abs (n.start - k) < 0.13) { ++onKick; break; }
-    expect (onKick >= 5, "bass locked to your kicks (" + juce::String (onKick) + "/6)");
+    const int needKick = (style == 3) ? 4 : 5;   // 9th は 1 拍目・和音の変化・後半 1 回だけ弾き直す
+    expect (onKick >= needKick, "bass locked to your kicks (" + juce::String (onKick) + "/6)");
 
     bool reg = true;
     for (const auto& n : notes) if (n.pitch < 28 || n.pitch > 43) reg = false;

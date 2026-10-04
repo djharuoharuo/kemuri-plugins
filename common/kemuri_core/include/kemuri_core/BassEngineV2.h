@@ -12,18 +12,20 @@
 #include "Rng.h"
 #include "Types.h"
 
-// ── kemuriBass v2 生成エンジン（ブームバップ系スタイル）──────────────────
-// 90 年代の作り方そのものをモデル化する（検証済みリサーチ準拠）:
-//  - リズム = あなたのキック（Drum Rack MIDI）。1 拍目は必ず、ベースはキックと一緒に鳴る。
-//    ネタの和音が変わる位置には必ず打点を置く。ドラム入力が無いときは実曲由来の定番キック。
-//  - 音高 = その瞬間のネタの和音（2 拍単位）と、ネタ自身のベース音（低域を抜いた音程）。
-//  - プロデューサーの手癖:
-//      Premier : サンプルのベースを verbatim でなぞる / キックのみ / 短いミュート（Mass Appeal）
-//      Pete    : サンプルのベースの動きを 8 分でなぞる / レガート / ルート→♭7→6 の歩き（T.R.O.Y.）
-//      9th     : サンプルの低域を捨てて自前のルート追従 / 伸ばす / 4 小節ごとに 2 音の経過音
-//      Dilla   : 1 拍目 + シンコペーション / 順次進行 / 長短を交互 / 後ろノリ（毎ループ同じズレ）
-//  - ループは毎回完全に同じ（1 ループ分の決定を固定してタイル）。変化はフレーズ端だけ。
-//  - 音域 E1..G2（MIDI 28..43）、直前の音に最も近いオクターブを選ぶ（跳躍しない）。
+// ── kemuriBass v2.1 生成エンジン（ブームバップ系スタイル）──────────────────
+// 90 年代ヒップホップのベースの基本だけで組む。v2.0 の「プロデューサーの手癖で音を動かす」
+// （ルート→♭7→5 の歩き・サンプルのベースを 8 分でなぞる等）は、1 小節 4〜5 音で音程が跳ね、
+// ヒップホップのベースに聞こえなかったため廃止した（ユーザーの実機確認, 2026-10-04）。
+//  1. ベースはキックと一緒に鳴る（あなたのキック。8 分以内に続くキックは 1 音にまとめる）
+//  2. 音はその時のネタの和音のルート。和音が変わる所では必ず弾き直す
+//  3. 1 小節 4 音まで。1 ループ分を決めたら完全に繰り返し、変化は 4 小節ごとのフレーズの最後だけ
+//  4. 音域は E1..D#2 の 1 オクターブに固定（ルートごとに置き場所が決まる → 跳ねない・高い音が出ない）
+// プロデューサーの違いは「音の長さ」「弾き直しの数」「フレーズの最後」だけ:
+//   Premier : キックごとに短く切る（Mass Appeal 型）か短めに伸ばす / 最後は抜いて空ける
+//   Pete    : レガートでつなぐ / 最後は次のルートへ下から 1 音で入る
+//   9th     : 1 拍目と和音の変化だけで長く伸ばす / 4 小節ごとに 2 音で歩いてつなぐ
+//   Dilla   : キックに後ろノリ（毎ループ同じズレ）/ 長短交互 / 最後は半音下から 1 音
+// Complexity を上げた時だけ、同じ和音の弾き直しで下の 5 度・♭7 へ動く（35 以下は動かない）。
 namespace kemuri::core
 {
 
@@ -45,8 +47,8 @@ struct V2Config
 {
     int style      = 0;    // 0 Mix / 1 Premier / 2 Dilla / 3 9th / 4 Pete
     int bars       = 4;    // 要求小節数（4/8/16）
-    int complexity = 30;   // 0-100: キック以外の打点・経過音の量
-    int fill       = 20;   // 0-100: フレーズ端の展開の量
+    int complexity = 30;   // 0-100: 同じ和音の弾き直しで 5 度・♭7 へ動く量（35 以下は動かない）
+    int fill       = 20;   // 0-100: フレーズの最後の変化の量
     int keyRoot    = 0;    // ネタ未解析時のキー
     int keyMode    = 1;
     const HarmonyAnalysis* harmony = nullptr;   // ok なら使う
@@ -58,26 +60,31 @@ struct V2Result
     std::vector<OutNote> notes;
     int         bars = 4;            // 実際の小節数（ループ長に合わせて自動延長することがある）
     Producer    producer = Producer::Premier;
-    std::string approach;            // UI 表示用（例: "サンプルのベースをなぞる / 短く"）
+    std::string approach;            // UI 表示用（例: "キックに乗せる / ルート / 短く切る"）
     bool        usedUserKick   = false;
-    bool        usedSampleBass = false;
+    bool        usedSampleBass = false;   // v2.1 では常に false（ルートのみ）
 };
 
 namespace v2detail
 {
-    inline constexpr int kLow = 28, kHigh = 43, kCenter = 33;   // E1..G2、中心 A1
+    inline constexpr int kLow = 28, kHigh = 40;   // E1..E2
+    inline constexpr int kMaxPerBar = 4;
 
-    // ピッチクラスを音域内で直前の音に最も近いオクターブへ
-    inline int place (int pc, int prev)
+    // ルートの置き場所: E1..D#2 の 1 オクターブに固定
+    inline int rootPitch (int pc) { return kLow + ((pc - 4) % 12 + 12) % 12; }
+
+    // ルートから semis 下（下の 5 度 = 5、下の ♭7 = 2）。音域を外れるならオクターブ上
+    inline int below (int rootP, int semis)
     {
-        int best = -1, bestDist = 1000;
-        for (int m = kLow; m <= kHigh; ++m)
-        {
-            if (((m % 12) + 12) % 12 != pc) continue;
-            const int d = std::abs (m - (prev > 0 ? prev : kCenter));
-            if (d < bestDist) { bestDist = d; best = m; }
-        }
-        return best;
+        int p = rootP - semis;
+        if (p < kLow) p += 12;
+        return std::min (p, kHigh);
+    }
+
+    // 目標音へ semis 下から入る（音域を外れるなら上から）
+    inline int approachTo (int target, int semis)
+    {
+        return (target - semis >= kLow) ? target - semis : std::min (kHigh, target + semis);
     }
 
     // 定番キック（ドラム入力が無いとき）。出典は各コメント。
@@ -126,181 +133,120 @@ inline V2Result buildBassV2 (const V2Config& cfg, Rng& rng)
     res.bars = std::min (16, std::max (cfg.bars, Lloop));   // ループ長の倍数（すべて 2 の冪）
     res.usedUserKick = hasK;
 
-    // ── 和音・サンプルベースの参照（ループ内位置で引く）
-    auto chordAt = [&] (int bar, double beat) -> std::pair<int, bool>
+    // その時点のネタの和音のルート（ループ内位置で引く。2 拍単位）
+    auto rootAt = [&] (int bar, double beat) -> int
     {
-        if (! hasH) return { cfg.keyRoot, cfg.keyMode == 1 };
-        const auto& h = cfg.harmony->halfBar[static_cast<size_t> ((bar % Lh) * 2 + (beat >= 2.0 ? 1 : 0))];
-        return { h.root, h.quality == "min" };
-    };
-    auto sampleBassAt = [&] (int bar, double beat) -> int
-    {
-        if (! hasH) return -1;
-        const int st = std::clamp (static_cast<int> (std::floor (beat * 4.0 + 1e-6)), 0, 15);
-        return cfg.harmony->bassMidi[static_cast<size_t> ((bar % Lh) * 16 + st)];
+        if (! hasH) return cfg.keyRoot;
+        const int lb = ((bar % Lh) + Lh) % Lh;
+        return cfg.harmony->halfBar[static_cast<size_t> (lb * 2 + (beat >= 2.0 ? 1 : 0))].root;
     };
 
-    // サンプルのベースがどれだけ鳴っているか（なぞる手法が使えるか）
-    double voiced = 0.0;
-    if (hasH)
-    {
-        for (int m : cfg.harmony->bassMidi) if (m >= 0) voiced += 1.0;
-        voiced /= static_cast<double> (cfg.harmony->bassMidi.size());
-    }
-    const bool sampleBassUsable = voiced >= 0.25;
-
-    // ── 生成ごとのアプローチ（多様性はここから。ランダムな飾りではない）
-    std::vector<std::vector<double>> fbKicks = fallbackKicks (P);
+    // ── 生成ごとの選択（音の長さ・ドラム無し時の定番キック）
+    const auto fbKicks = fallbackKicks (P);
     const auto& fbKick = fbKicks[static_cast<size_t> (rng.next() * fbKicks.size()) % fbKicks.size()];
 
-    bool followSample = false, staccato = false, legato = false, fullClipMotion = false, alternateLen = false;
-    bool ninthBounce = false, ninthApproach = false;
-    const double roll = rng.next();
+    enum class Len { Short, Medium, Legato, Sustain, LongShort };
+    Len len = Len::Legato;
     switch (P)
     {
         case Producer::Premier:
-            // サンプルの低域が十分 → 50% verbatim / 25% ルートのペダル / 25% Full Clip 型。
-            // 低域が無い → ルートのペダル / Full Clip 型（ルート+低い 5 度+下の ♭7）を半々。
-            if (sampleBassUsable) { followSample = roll < 0.5; fullClipMotion = roll >= 0.75; }
-            else                  { fullClipMotion = roll < 0.5; }
-            staccato     = rng.next() < 0.7;                     // Mass Appeal: 全部短いミュート
-            res.approach = followSample ? "サンプルのベースをそのまま" : (fullClipMotion ? "ルート+低い5度/下の♭7" : "ルートのペダル");
-            res.approach += staccato ? " / 短く切る" : " / 短めに伸ばす";
+            len = rng.next() < 0.65 ? Len::Short : Len::Medium;
+            res.approach = len == Len::Short ? "キックに乗せる / ルート / 短く切る" : "キックに乗せる / ルート / 短めに伸ばす";
             break;
         case Producer::Pete:
-            followSample = sampleBassUsable && roll < 0.7;
-            legato       = true;
-            res.approach = followSample ? "サンプルのベースの動きを8分でなぞる / レガート" : "ルート→♭7→5の歩き / レガート";
+            len = Len::Legato;
+            res.approach = "キックに乗せる / ルート / レガート";
             break;
         case Producer::Ninth:
-            followSample  = false;                               // サンプルの低域は捨てて自前のベース
-            legato        = true;
-            ninthBounce   = roll >= 0.5 && roll < 0.8;           // ルートと 5 度のバウンス
-            ninthApproach = roll >= 0.8;                         // 和音変化の前に ♭7 から入る
-            res.approach  = ninthBounce ? "ルートと5度 / 伸ばす / 4小節ごとに経過音"
-                          : ninthApproach ? "ルート+変化前の♭7 / 伸ばす / 4小節ごとに経過音"
-                                          : "和音のルートを追う / 伸ばす / 4小節ごとに経過音";
+            len = Len::Sustain;
+            res.approach = "1拍目と和音の変化だけ / 長く伸ばす";
             break;
         case Producer::Dilla:
-            followSample = sampleBassUsable && roll < 0.6;
-            alternateLen = true;
-            res.approach = std::string (followSample ? "サンプルのベース+" : "") + "順次進行 / 長短交互 / 後ろノリ";
+            len = Len::LongShort;
+            res.approach = "キックに乗せる / ルート / 後ろノリ / 長短交互";
             break;
     }
-    res.usedSampleBass = followSample;
+    const double motionProb = std::max (0.0, c - 0.35) * 1.2;   // Complexity 35 以下は 0
+    if (motionProb > 0.0) res.approach += " / 5度・♭7へ動く";
 
-    // Dilla の後ろノリ: ループ内の打点ごとに固定のズレ（毎ループ同じ）
+    // Dilla の後ろノリ: ループ内の打点ごとに固定のズレ（毎ループ同じ, 〜32 分 1 つ弱）
     std::array<double, 64> dillaLate {};
-    for (auto& v : dillaLate) v = (P == Producer::Dilla) ? 0.03 + rng.next() * 0.07 : 0.0;   // 〜32 分 1 つ弱
+    for (auto& v : dillaLate) v = (P == Producer::Dilla) ? 0.03 + rng.next() * 0.05 : 0.0;
 
     // ── 1 ループ分（Lloop 小節）を決定
-    // towardPc >= 0 の音は「次の音（towardPc）へ順次で解決する経過音」として、
-    // 目標音の近くのオクターブに置く。
-    struct Hit { double pos; int pc; bool chordChange; int towardPc = -1; };
+    struct Hit { double pos; int pitch; bool must; bool approach = false; };
     std::vector<std::vector<Hit>> loopHits (static_cast<size_t> (Lloop));
     for (int lb = 0; lb < Lloop; ++lb)
     {
-        std::vector<double> on = hasK ? cfg.kick->bars[static_cast<size_t> (lb % Lk)] : fbKick;
-        std::sort (on.begin(), on.end());
+        std::vector<double> kicks = hasK ? cfg.kick->bars[static_cast<size_t> (lb % Lk)] : fbKick;
+        std::sort (kicks.begin(), kicks.end());
 
-        // 1 拍目は必ず（わずかな前後ズレのキックはそのまま使う）
-        if (on.empty() || on.front() > 0.2) on.insert (on.begin(), 0.0);
+        const int  r0 = rootAt (lb, 0.0), r2 = rootAt (lb, 2.0);
+        const bool midChange = (r0 != r2);
 
-        // 2 拍目の和音変化には必ず打点（Dilla は 16 分先取り）
-        const auto c0 = chordAt (lb, 0.0), c2 = chordAt (lb, 2.0);
-        const bool midChange = (c0 != c2);
+        // 候補: 1 拍目（必須）+ 和音の変化点（必須）+ キック
+        struct Cand { double pos; bool must; bool change; };
+        std::vector<Cand> cand { { 0.0, true, false } };
         if (midChange)
         {
-            bool near = false;
-            for (double p : on) if (std::abs (p - 2.0) <= 0.26) near = true;
-            if (! near) on.push_back (P == Producer::Dilla ? 1.75 : 2.0);
+            // 新しいルートへはキックで移る: 2 拍目の裏の 16 分（食い）〜 4 拍目頭までのキックのうち
+            // 3 拍目に最も近いもの。キックが無ければ 3 拍目頭（Dilla は 16 分前に食う）
+            double at = (P == Producer::Dilla) ? 1.75 : 2.0, bestD = 1e9;
+            for (double k : kicks)
+                if (k >= 1.74 && k <= 3.0 && std::abs (k - 2.0) < bestD) { bestD = std::abs (k - 2.0); at = k; }
+            cand.push_back ({ at, true, true });
         }
+        if (P == Producer::Ninth)
+        {
+            // 9th: 和音が変わらない小節だけ、後半最初のキックで 1 回弾き直す
+            if (! midChange)
+                for (double k : kicks) if (k >= 2.0 && k <= 3.5) { cand.push_back ({ k, false, false }); break; }
+        }
+        else
+        {
+            for (double k : kicks) if (k > 0.2) cand.push_back ({ k, false, false });
+        }
+        std::stable_sort (cand.begin(), cand.end(), [] (const Cand& a, const Cand& b) { return a.pos < b.pos; });
 
-        // プロデューサー別の追加打点（既存の打点から 16 分以上離れた所だけ）
-        auto addIfFree = [&on] (double p)
+        // 同じ位置（和音の変化点に選んだキック）は 1 つに、8 分以内に続く打点も 1 つに（和音の変化点を優先）
+        std::vector<Cand> kept;
+        for (const auto& x : cand)
         {
-            for (double q : on) if (std::abs (q - p) < 0.3) return;
-            on.push_back (p);
-        };
-        if (P == Producer::Pete)
-        {
-            // サンプルのベースが 8 分で動く位置をなぞる（＋ Complexity で裏拍）
-            for (int e = 0; e < 8; ++e)
+            if (! kept.empty() && std::abs (x.pos - kept.back().pos) < 1e-6)
             {
-                const double p = e * 0.5;
-                const int cur = sampleBassAt (lb, p), prv = (e > 0) ? sampleBassAt (lb, p - 0.5) : -1;
-                if (followSample && cur >= 0 && cur != prv) addIfFree (p);
-                else if (e % 2 == 1 && rng.next() < c * 0.6) addIfFree (p);
+                kept.back().must   = kept.back().must   || x.must;
+                kept.back().change = kept.back().change || x.change;
+                continue;
             }
+            if (! kept.empty() && x.pos - kept.back().pos < 0.55)
+            {
+                if (x.must && ! kept.back().must) kept.back() = x;
+                continue;
+            }
+            kept.push_back (x);
         }
-        else if (P == Producer::Dilla)
-        {
-            for (double p : { 0.75, 2.25, 3.25 }) if (rng.next() < 0.15 + c * 0.5) addIfFree (p);
-        }
-        else if (P == Producer::Ninth)
-        {
-            if (ninthBounce || rng.next() < c * 0.4) addIfFree (3.0);
-            if (ninthApproach && midChange) addIfFree (1.5);   // 和音変化の前に ♭7
-        }
-        else // Premier: キックのみ。Complexity でまれに次小節頭への 16 分ピックアップ
-        {
-            if (rng.next() < c * 0.3) addIfFree (3.75);
-        }
-        std::sort (on.begin(), on.end());
 
-        // 近すぎる打点（ダブルキック等）は 1 つに
-        std::vector<double> clean;
-        for (double p : on) if (clean.empty() || p - clean.back() >= 0.2) clean.push_back (p);
+        // 1 小節 4 音まで（必須を残し、後ろの打点から削る）
+        while (kept.size() > static_cast<size_t> (kMaxPerBar))
+        {
+            auto it = std::find_if (kept.rbegin(), kept.rend(), [] (const Cand& x) { return ! x.must; });
+            if (it == kept.rend()) break;
+            kept.erase (std::next (it).base());
+        }
 
-        // 密度上限（研究: Premier/9th ≈2-4、Dilla 3-7、Pete 中央値 6）
-        const size_t cap = (P == Producer::Pete) ? 8 : (P == Producer::Dilla ? 7 : 5);
-        if (clean.size() > cap) clean.resize (cap);
-
-        // 音高（ピッチクラス）
+        // 音高: ルート。Complexity が高い時だけ、同じ和音の弾き直しで下の 5 度・♭7
         auto& hits = loopHits[static_cast<size_t> (lb)];
-        int prevPc = -1;
-        for (size_t i = 0; i < clean.size(); ++i)
+        for (const auto& x : kept)
         {
-            const double p = clean[i];
-            const auto ch = chordAt (lb, p);
-            const int root = ch.first;
-            const bool minor = ch.second;
-            const int sb = sampleBassAt (lb, p);
-            int pc = root;
-            const bool atChange = (p == 0.0) || (midChange && std::abs (p - 2.0) <= 0.26);
-
-            if (followSample && sb >= 0)
-                pc = ((sb % 12) + 12) % 12;
-            else if (! atChange && i > 0)
-            {
-                // 和音内の動き（拍頭/和音変化点以外）
-                if (P == Producer::Premier && fullClipMotion)
-                    pc = (root + ((i % 2 == 1) ? 7 : 10)) % 12;                    // 低い 5 度 / 下の ♭7
-                else if (P == Producer::Pete)
-                {
-                    // ルート→♭7→5→♭7（root-7th-5th のジャジーな定番。T.R.O.Y. の Dorian 6 度は
-                    // ネタが Aeolian だと濁るため、和音内の音だけで歩く）
-                    static constexpr std::array<int, 4> walk { 0, 10, 7, 10 };
-                    pc = (root + walk[i % walk.size()]) % 12;
-                }
-                else if (P == Producer::Dilla)
-                {
-                    const std::array<int, 4> step { 10, 7, minor ? 3 : 4, 5 };   // ♭7, 5, 3, 4 の順次
-                    pc = (root + step[static_cast<size_t> (rng.next() * 4) % 4]) % 12;
-                }
-                else if (P == Producer::Ninth && p >= 2.9 && p <= 3.1)
-                    pc = (root + 7) % 12;                                           // ルート-5 度のバウンス
-                else if (P == Producer::Ninth && ninthApproach && p >= 1.4 && p <= 1.6)
-                    pc = (chordAt (lb, 2.0).first + 10) % 12;                       // 次の和音の ♭7 から入る
-            }
-            hits.push_back ({ p, pc, atChange });
-            prevPc = pc;
+            const int root = x.change ? r2 : rootAt (lb, x.pos);
+            int pitch = rootPitch (root);
+            if (! x.must && motionProb > 0.0 && rng.next() < motionProb)
+                pitch = below (pitch, rng.next() < 0.6 ? 5 : 2);
+            hits.push_back ({ x.pos, pitch, x.must });
         }
-        (void) prevPc;
     }
 
-    // ── タイル + フレーズ端の展開 → ノート化
-    int prevPitch = -1;
+    // ── タイル + フレーズの最後（4 小節ごと・最終小節）だけ変化 → ノート化
     for (int bar = 0; bar < res.bars; ++bar)
     {
         std::vector<Hit> hits = loopHits[static_cast<size_t> (bar % Lloop)];
@@ -308,59 +254,80 @@ inline V2Result buildBassV2 (const V2Config& cfg, Rng& rng)
 
         if (phraseEnd)
         {
-            const auto nextCh = chordAt (bar + 1, 0.0);
-            const int nextRoot = nextCh.first;
-            double devProb = (P == Producer::Premier) ? f * 0.5 : (P == Producer::Ninth ? 0.6 + f * 0.4 : f);
-            if (bar == res.bars - 1) devProb = std::min (1.0, devProb + 0.2);
-            if (rng.next() < devProb)
+            const int nextRootP = rootPitch (rootAt (bar + 1, 0.0));
+            auto dropFrom = [&hits] (double from)
             {
-                const bool subtractive = (P == Producer::Premier || P == Producer::Dilla) && rng.next() < 0.5;
-                if (subtractive)
+                hits.erase (std::remove_if (hits.begin(), hits.end(),
+                                            [from] (const Hit& h) { return h.pos >= from && h.pos > 0.0; }),
+                            hits.end());
+            };
+            auto keepAtMost = [&hits] (size_t n)
+            {
+                while (hits.size() > n)
                 {
-                    // 3 拍目以降を抜いて空白で締める（ドロップアウト）
-                    hits.erase (std::remove_if (hits.begin(), hits.end(), [] (const Hit& h) { return h.pos >= 2.9; }), hits.end());
+                    auto it = std::find_if (hits.rbegin(), hits.rend(), [] (const Hit& h) { return ! h.must; });
+                    if (it == hits.rend()) break;
+                    hits.erase (std::next (it).base());
                 }
-                else
-                {
-                    // 次の小節のルートへ 2 音でつなぐ（9th の 2 音トランジション / Pete の歩き）
-                    hits.erase (std::remove_if (hits.begin(), hits.end(), [] (const Hit& h) { return h.pos >= 2.9; }), hits.end());
-                    const int stepIn = (rng.next() < 0.5) ? 2 : 1;     // 全音下 or 半音下から
-                    hits.push_back ({ 3.0, (nextRoot + 7) % 12, false, nextRoot });
-                    hits.push_back ({ 3.5, ((nextRoot - stepIn) % 12 + 12) % 12, false, nextRoot });
-                }
+            };
+            switch (P)
+            {
+                case Producer::Premier:
+                    if (rng.next() < 0.15 + f * 0.6) dropFrom (2.9);              // 抜いて空ける
+                    break;
+                case Producer::Pete:
+                    if (rng.next() < 0.25 + f * 0.6)
+                    {
+                        dropFrom (3.25);
+                        keepAtMost (static_cast<size_t> (kMaxPerBar - 1));
+                        hits.push_back ({ 3.5, approachTo (nextRootP, rng.next() < 0.5 ? 1 : 2), false, true });
+                    }
+                    break;
+                case Producer::Ninth:
+                    if (rng.next() < 0.4 + f * 0.6)
+                    {
+                        // 2 音で歩いて次のルートへ（3 半音下 → 1〜2 半音下 → ルート）
+                        dropFrom (2.9);
+                        const int a2 = approachTo (nextRootP, rng.next() < 0.5 ? 1 : 2);
+                        const int a1 = approachTo (nextRootP, 3);
+                        hits.push_back ({ 3.0, a1, false, true });
+                        hits.push_back ({ 3.5, a2, false, true });
+                    }
+                    break;
+                case Producer::Dilla:
+                    if (rng.next() < 0.15 + f * 0.6)
+                    {
+                        dropFrom (3.25);
+                        keepAtMost (static_cast<size_t> (kMaxPerBar - 1));
+                        hits.push_back ({ 3.5, approachTo (nextRootP, 1), false, true });   // 半音下から
+                    }
+                    break;
             }
         }
 
         for (size_t i = 0; i < hits.size(); ++i)
         {
             const double start = hits[i].pos;
-            const double next  = (i + 1 < hits.size()) ? hits[i + 1].pos : 4.0 + (loopHits[static_cast<size_t> ((bar + 1) % Lloop)].empty() ? 0.0 : loopHits[static_cast<size_t> ((bar + 1) % Lloop)].front().pos);
+            const double next  = (i + 1 < hits.size()) ? hits[i + 1].pos : 4.0;   // 次の小節は必ず 1 拍目から
             const double gap   = std::max (0.1, next - start);
 
             double dur;
-            if (staccato)          dur = std::min (0.35, gap * 0.85);                    // 短いミュート
-            else if (legato)       dur = gap * 0.92;                                     // つなげる
-            else if (alternateLen) dur = (i % 2 == 0) ? gap * 0.9 : std::min (0.22, gap * 0.8);
-            else                   dur = std::min (1.5, gap * 0.7);                      // 短めに伸ばす
-            dur = std::max (0.08, std::min (dur, gap - 0.02));
+            if (hits[i].approach) dur = std::min (0.45, gap * 0.9);
+            else switch (len)
+            {
+                case Len::Short:     dur = std::min (0.4, gap * 0.8);  break;   // 短いミュート
+                case Len::Medium:    dur = std::min (1.0, gap * 0.7);  break;   // 短めに伸ばす
+                case Len::Legato:    dur = gap * 0.95;                  break;   // つなげる
+                case Len::Sustain:   dur = gap * 0.98;                  break;   // 伸ばし切る
+                case Len::LongShort: dur = (i % 2 == 0) ? gap * 0.9 : std::min (0.3, gap * 0.8); break;
+            }
 
             double pos = start;
-            if (P == Producer::Dilla && pos > 0.01) pos += dillaLate[static_cast<size_t> ((bar % Lloop) * 8 + i) % dillaLate.size()];
+            if (P == Producer::Dilla && pos > 0.01)
+                pos += dillaLate[static_cast<size_t> ((bar % Lloop) * 8 + static_cast<int> (i)) % dillaLate.size()];
+            dur = std::max (0.08, std::min (dur, start + gap - pos - 0.02));
 
-            int pitch;
-            if (hits[i].towardPc >= 0)
-            {
-                // 経過音: 目標（次の小節頭）の置き場所を先に決め、その近くに置く
-                const int target = place (hits[i].towardPc, prevPitch);
-                pitch = place (hits[i].pc, target);
-                // 目標の下から入る（approach-from-below）を優先
-                if (pitch > target && pitch - 12 >= kLow) pitch -= 12;
-            }
-            else
-                pitch = place (hits[i].pc, prevPitch);
-            if (pitch < 0) continue;
-            prevPitch = pitch;
-            res.notes.push_back ({ pitch, bar * 4.0 + pos, dur, 127 });
+            res.notes.push_back ({ hits[i].pitch, bar * 4.0 + pos, dur, 127 });
         }
     }
     return res;

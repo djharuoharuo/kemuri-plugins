@@ -347,7 +347,7 @@ void KemuriBassEditor::resized()
 
     // 解析サマリ（ネタ / キック の 2 行）+ 生成（警告含め最大 2 行）+ 学習パターン状態
     area.removeFromTop (10);
-    analysisLabel.setBounds (area.removeFromTop (46));
+    analysisLabel.setBounds (area.removeFromTop (68));   // ネタ / キック / 今回の警告（前回のキックを使う時）
     area.removeFromTop (4);
     generateLabel.setBounds (area.removeFromTop (44));
     bankLabel.setBounds (area.removeFromTop (20));

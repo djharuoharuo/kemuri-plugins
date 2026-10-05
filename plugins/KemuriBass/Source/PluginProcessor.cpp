@@ -274,6 +274,8 @@ void KemuriBassProcessor::updateAnalysisSummary()
                + u8 ("\xE6\x89\x93/\xE5\xB0\x8F\xE7\xAF\x80 | \xE3\x83\xAB\xE3\x83\xBC\xE3\x83\x97")
                + juce::String (kickV2.loopBars) + u8 ("\xE5\xB0\x8F\xE7\xAF\x80")
                + (kickV2.hasSwing ? " | swing " + juce::String (kickV2.swingPercent) + "%" : juce::String());
+        if (kickProblem.isNotEmpty())   // 今回は読めなかった → 前回のキックを使い続ける
+            kick << u8 ("\xEF\xBC\x88\xE5\x89\x8D\xE5\x9B\x9E\xEF\xBC\x89") << "\n" << u8 ("\xE2\x9A\xA0 \xE4\xBB\x8A\xE5\x9B\x9E: ") << kickProblem;
     }
     else
     {
@@ -283,6 +285,8 @@ void KemuriBassProcessor::updateAnalysisSummary()
                                                  "\xEF\xBC\x88\xE3\x81\x84\xE3\x81\xBE\xE3\x81\xAF\xE5\xAE\x9A\xE7\x95\xAA\xE3\x82\xAD\xE3\x83\x83\xE3\x82\xAF\xE3\x81\xA7\xE7\x94\x9F\xE6\x88\x90\xEF\xBC\x89"));
     }
 
+    if (harmonyV2.ok && netaProblem.isNotEmpty())
+        neta << u8 ("\xEF\xBC\x88\xE5\x89\x8D\xE5\x9B\x9E\xEF\xBC\x89");   // 今回は読めなかった → 前回のネタの解析を使い続ける
     analysisSummary = neta + "\n" + kick;
 }
 
@@ -327,8 +331,14 @@ void KemuriBassProcessor::requestAnalyze()
         }
     }
 
-    // ── キック: ドラム MIDI（ネタと同じ小節範囲。ネタが無ければ直近 16 小節）
-    if (! recentEvents.empty())
+    // ── キック: ドラム MIDI（最後の連続した再生分。ネタと同じ小節範囲、ネタが無ければ直近 16 小節）
+    // 今回読めなかったときは前回のキックを使い続け、理由だけ表示する（kickV2 は上書きしない）
+    kickProblem.clear();
+    if (! recentEvents.empty() && ! haveAudio && recentEvents.back().ppq - recentEvents.front().ppq < 7.0)
+        kickProblem = u8 ("\xE5\x86\x8D\xE7\x94\x9F\xE3\x81\x97\xE3\x81\xAA\xE3\x81\x8C\xE3\x82\x89 2 \xE5\xB0\x8F\xE7\xAF\x80\xE4\xBB\xA5\xE4\xB8\x8A\xE6\xB5\x81\xE3\x81\x97\xE3\x81\xA6\xE3\x81\x8B\xE3\x82\x89 Analyze");
+    else if (recentEvents.empty())
+        kickProblem = u8 ("\xE5\x86\x8D\xE7\x94\x9F\xE4\xB8\xAD\xE3\x81\xAB\xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\xAE MIDI \xE3\x81\x8C\xE5\xB1\x8A\xE3\x81\x84\xE3\x81\xA6\xE3\x81\x84\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93 \xE2\x80\x94 MIDI From = \xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\xAE\xE3\x83\x88\xE3\x83\xA9\xE3\x83\x83\xE3\x82\xAF\xEF\xBC\x88\xE4\xB8\x8B\xE3\x81\xAE\xE6\xAC\x84 Pre FX\xEF\xBC\x89");
+    else
     {
         long firstBar, endBar;
         if (haveAudio)
@@ -345,7 +355,6 @@ void KemuriBassProcessor::requestAnalyze()
         events.reserve (recentEvents.size());
         for (const auto& e : recentEvents) events.push_back ({ e.ppq, e.pitch, e.isOn });
         const auto k = analyzeKick (events, firstBar, endBar);
-        kickProblem.clear();
         const bool padRange   = k.kickNote >= 35 && k.kickNote <= 51;
         // Drum Rack のチェーンの再生音程（既定 C3 = 60）の 1 音だけで届いている:
         //  - キックだけのチェーンを選んでいる → 打数が少なくスネアの 2・4 拍が無い → キックとして採用
@@ -353,23 +362,15 @@ void KemuriBassProcessor::requestAnalyze()
         // それ以外の音（ネタのチョップのパッド等）は従来どおりパッド範囲で判定する。
         const bool singleNote = k.ok && k.distinctNotes == 1 && k.kickNote == 60;
         const bool kickOnly   = singleNote && k.kickPerBar <= 6.0 && k.backbeatRate < 0.75;
-        if (singleNote && ! kickOnly)
-        {
-            kickV2 = {};
-            kickProblem = abletonNoteName (k.kickNote)
-                          + u8 (" \xE3\x81\xAE 1 \xE9\x9F\xB3\xE3\x81\xAB\xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\x8C\xE5\x85\xA8\xE9\x83\xA8\xE3\x81\xBE\xE3\x81\xA8\xE3\x81\xBE\xE3\x81\xA3\xE3\x81\xA6\xE5\xB1\x8A\xE3\x81\x84\xE3\x81\xA6\xE3\x81\x84\xE3\x81\xBE\xE3\x81\x99 \xE2\x80\x94 MIDI From \xE3\x81\xAE\xE4\xB8\x8B\xE3\x81\xAE\xE6\xAC\x84\xE3\x82\x92 Pre FX \xE3\x81\x8B Kick Drum \xE3\x81\xAB");
-        }
-        else if (k.ok && ! padRange && ! kickOnly)
-        {
+        if (! k.ok)
+            kickProblem = u8 ("\xE3\x83\x8D\xE3\x82\xBF\xE3\x82\x92\xE8\xA7\xA3\xE6\x9E\x90\xE3\x81\x97\xE3\x81\x9F\xE5\x8C\xBA\xE9\x96\x93\xE3\x81\xAB\xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\xAE MIDI \xE3\x81\x8C\xE3\x81\x82\xE3\x82\x8A\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93 \xE2\x80\x94 \xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\xAE\xE3\x82\xAF\xE3\x83\xAA\xE3\x83\x83\xE3\x83\x97\xE3\x82\x82\xE9\xB3\xB4\xE3\x82\x89\xE3\x81\x97\xE3\x81\xA6\xE5\x86\x8D\xE7\x94\x9F");
+        else if (singleNote && ! kickOnly)
+            kickProblem = abletonNoteName (k.kickNote) + u8 (" \xE3\x81\xAE 1 \xE9\x9F\xB3\xE3\x81\xAB\xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\x8C\xE5\x85\xA8\xE9\x83\xA8\xE3\x81\xBE\xE3\x81\xA8\xE3\x81\xBE\xE3\x81\xA3\xE3\x81\xA6\xE5\xB1\x8A\xE3\x81\x84\xE3\x81\xA6\xE3\x81\x84\xE3\x81\xBE\xE3\x81\x99 \xE2\x80\x94 MIDI From \xE3\x81\xAE\xE4\xB8\x8B\xE3\x81\xAE\xE6\xAC\x84\xE3\x82\x92 Pre FX \xE3\x81\x8B Kick Drum \xE3\x81\xAB");
+        else if (! padRange && ! kickOnly)
             // Drum Rack のパッド範囲（C1〜D#2 = 36〜51）外 → ドラムのトラックではない可能性が高い。
             // ネタのチョップをキックと取り違えないよう採用しない。
-            kickV2 = {};
-            kickProblem = abletonNoteName (k.kickNote)
-                          + u8 (" \xE3\x81\xAF\xE3\x82\xAD\xE3\x83\x83\xE3\x82\xAF\xE3\x81\xA7\xE3\x81\xAF\xE3\x81\xAA\xE3\x81\x95\xE3\x81\x9D\xE3\x81\x86\xE3\x81\xA7\xE3\x81\x99 \xE2\x80\x94 "
-                                "MIDI From \xE3\x81\x8C\xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\xAE\xE3\x83\x88\xE3\x83\xA9\xE3\x83\x83\xE3\x82\xAF\xE3\x81\x8B\xE7\xA2\xBA\xE8\xAA\x8D"
-                                "\xEF\xBC\x88\xE3\x83\x8D\xE3\x82\xBF\xE3\x81\xAE\xE3\x83\x88\xE3\x83\xA9\xE3\x83\x83\xE3\x82\xAF\xE3\x81\xAB\xE3\x81\xAA\xE3\x81\xA3\xE3\x81\xA6\xE3\x81\x84\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93\xE3\x81\x8B\xEF\xBC\x9F\xEF\xBC\x89");
-        }
-        else if (k.ok)
+            kickProblem = abletonNoteName (k.kickNote) + u8 (" \xE3\x81\xAF\xE3\x82\xAD\xE3\x83\x83\xE3\x82\xAF\xE3\x81\xA7\xE3\x81\xAF\xE3\x81\xAA\xE3\x81\x95\xE3\x81\x9D\xE3\x81\x86\xE3\x81\xA7\xE3\x81\x99 \xE2\x80\x94 MIDI From \xE3\x81\x8C\xE3\x83\x89\xE3\x83\xA9\xE3\x83\xA0\xE3\x81\xAE\xE3\x83\x88\xE3\x83\xA9\xE3\x83\x83\xE3\x82\xAF\xE3\x81\x8B\xE7\xA2\xBA\xE8\xAA\x8D\xEF\xBC\x88\xE3\x83\x8D\xE3\x82\xBF\xE3\x81\xAE\xE3\x83\x88\xE3\x83\xA9\xE3\x83\x83\xE3\x82\xAF\xE3\x81\xAB\xE3\x81\xAA\xE3\x81\xA3\xE3\x81\xA6\xE3\x81\x84\xE3\x81\xBE\xE3\x81\x9B\xE3\x82\x93\xE3\x81\x8B\xEF\xBC\x9F\xEF\xBC\x89");
+        else
             kickV2 = k;
     }
 
@@ -469,8 +470,19 @@ void KemuriBassProcessor::drainCapture()
     int start1, size1, start2, size2;
     const int ready = captureFifo.getNumReady();
     captureFifo.prepareToRead (ready, start1, size1, start2, size2);
-    for (int i = 0; i < size1; ++i) recentEvents.push_back (captureBuffer[static_cast<size_t> (start1 + i)]);
-    for (int i = 0; i < size2; ++i) recentEvents.push_back (captureBuffer[static_cast<size_t> (start2 + i)]);
+    // 新しい再生区間のイベントが来たら古い区間は捨てる（前の再生・別のルーティングの頃の
+    // イベントが同じソング位置に残って混ざるのを防ぐ。ネタの音と同じく最後の連続した再生分だけ使う）
+    auto take = [this] (const CapturedEvent& e)
+    {
+        if (e.seg != recentSegment)
+        {
+            recentEvents.clear();
+            recentSegment = e.seg;
+        }
+        if (e.pitch >= 0) recentEvents.push_back (e);   // 区間の始まりの印は保存しない
+    };
+    for (int i = 0; i < size1; ++i) take (captureBuffer[static_cast<size_t> (start1 + i)]);
+    for (int i = 0; i < size2; ++i) take (captureBuffer[static_cast<size_t> (start2 + i)]);
     captureFifo.finishedRead (size1 + size2);
 
     if (! recentEvents.empty())
@@ -536,8 +548,28 @@ void KemuriBassProcessor::timerCallback()
 
 // ── Realtime MIDI capture（R11: alloc/lock/file-IO なし）─────────────
 void KemuriBassProcessor::captureIncoming (const juce::MidiBuffer& midi, double blockPpq,
-                                           double beatsPerSample)
+                                           double beatsPerSample, bool isPlaying, int numSamples)
 {
+    // 再生中だけ記録する（停止中に届いた音はソング位置が意味を持たない）。
+    // 再生開始・位置ジャンプで区間番号を進める。
+    if (! isPlaying)
+    {
+        midiCapturing = false;
+        return;
+    }
+    if (! midiCapturing || std::abs (blockPpq - midiExpectedPpq) > 0.02)
+    {
+        ++midiSegment;
+        midiCapturing = true;
+        // 区間の始まりの印（pitch = -1）。ドラムが 1 音も来ない再生でも古いイベントを捨てられる
+        int s1, z1, s2, z2;
+        captureFifo.prepareToWrite (1, s1, z1, s2, z2);
+        if (z1 > 0)      captureBuffer[static_cast<size_t> (s1)] = { blockPpq, -1, false, midiSegment };
+        else if (z2 > 0) captureBuffer[static_cast<size_t> (s2)] = { blockPpq, -1, false, midiSegment };
+        captureFifo.finishedWrite (z1 + z2);
+    }
+    midiExpectedPpq = blockPpq + numSamples * beatsPerSample;
+
     for (const auto meta : midi)
     {
         const auto msg = meta.getMessage();
@@ -550,9 +582,9 @@ void KemuriBassProcessor::captureIncoming (const juce::MidiBuffer& midi, double 
         int start1, size1, start2, size2;
         captureFifo.prepareToWrite (1, start1, size1, start2, size2);
         if (size1 > 0)
-            captureBuffer[static_cast<size_t> (start1)] = { ppq, msg.getNoteNumber(), on };
+            captureBuffer[static_cast<size_t> (start1)] = { ppq, msg.getNoteNumber(), on, midiSegment };
         else if (size2 > 0)
-            captureBuffer[static_cast<size_t> (start2)] = { ppq, msg.getNoteNumber(), on };
+            captureBuffer[static_cast<size_t> (start2)] = { ppq, msg.getNoteNumber(), on, midiSegment };
         captureFifo.finishedWrite (size1 + size2);   // 満杯なら 0（最新をドロップ）
     }
 }
@@ -712,7 +744,7 @@ void KemuriBassProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     buffer.clear();
 
     // 入力 MIDI（ドラム）をキック解析用にキャプチャしてから消す
-    captureIncoming (midiMessages, ppqStart, beatsPerSample);
+    captureIncoming (midiMessages, ppqStart, beatsPerSample, isPlaying, numSamples);
     midiMessages.clear();
 
     // ハングノート防止: シーケンス差し替え / 停止遷移で all-notes-off

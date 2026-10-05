@@ -47,35 +47,27 @@ enum class DrumSource
     kickChainC3  // Kick Drum のチェーンだけ: キックが C3 で届く
 };
 
-void runScenario (double startBar, int style, const char* name, DrumSource drumSource = DrumSource::pads)
+// 合成したネタの音（サイドチェイン, 2 小節ループ Am|F、ベース A1/F1）とドラム MIDI を
+// [startBar, startBar + bars) の区間だけ processBlock に流す（1 回の連続した再生）。
+// withDrums = false はドラムのクリップが止まっている再生。戻り値は最初のブロックの出力ピーク。
+float playPass (KemuriBassProcessor& proc, FakePlayHead& ph, double startBar, int bars,
+                DrumSource drumSource, bool withDrums = true)
 {
-    std::printf ("\n[%s] song starts at bar %.0f, style %d\n", name, startBar, style);
-
-    KemuriBassProcessor proc;
-    expect (proc.getBusCount (true) == 1 && ! proc.getPluginHasMainInput(),
-            "single sidechain input, exposed as VST3 aux (no main input)");
-    FakePlayHead ph;
-    proc.setPlayHead (&ph);
-
     const double sr = 44100.0;
     const int bs = 512;
-    proc.setRateAndBufferSizeDetails (sr, bs);
-    proc.prepareToPlay (sr, bs);
-
     const int numIn  = proc.getTotalNumInputChannels();
     const int numOut = proc.getTotalNumOutputChannels();
-    expect (numIn >= 2, "sidechain bus enabled by default (input channels = " + juce::String (numIn) + ")");
-    juce::AudioBuffer<float> buf (std::max (numIn, numOut), bs);
+    juce::AudioBuffer<float> buf (std::max (2, std::max (numIn, numOut)), bs);
     juce::MidiBuffer midi;
 
     const double bps  = (ph.bpm / 60.0) / sr;
-    const int    bars = 10;
     const double ppq0 = startBar * 4.0;
     const long   total = static_cast<long> (bars * 4.0 / bps);
+    ph.playing = true;
 
     // ドラム MIDI イベント（ソング絶対位置）
     std::vector<DrumEvent> drums;
-    for (int bar = static_cast<int> (startBar); bar < static_cast<int> (startBar) + bars; ++bar)
+    for (int bar = static_cast<int> (startBar); withDrums && bar < static_cast<int> (startBar) + bars; ++bar)
     {
         const double b0 = bar * 4.0;
         const bool merged = drumSource == DrumSource::mergedC3;
@@ -84,7 +76,7 @@ void runScenario (double startBar, int style, const char* name, DrumSource drumS
         const int  hatN   = merged ? 60 : 42;
         for (double k : { 0.0, 1.75, 2.5 }) { drums.push_back ({ b0 + k, kickN, true }); drums.push_back ({ b0 + k + 0.1, kickN, false }); }
         if (drumSource == DrumSource::kickChainC3) continue;
-        for (double s : { 1.0, 3.0 })       { drums.push_back ({ b0 + s, snareN, true }); drums.push_back ({ b0 + s + 0.1, snareN, false }); }
+        for (double sn : { 1.0, 3.0 })      { drums.push_back ({ b0 + sn, snareN, true }); drums.push_back ({ b0 + sn + 0.1, snareN, false }); }
         for (int h = 0; h < 16; ++h)
         {
             const double pos = h * 0.25 + ((h % 2) ? 0.04 : 0.0);
@@ -92,18 +84,19 @@ void runScenario (double startBar, int style, const char* name, DrumSource drumS
         }
     }
 
-    for (long s = 0; s < total; s += bs)
+    float firstPeak = 0.0f;
+    for (long smp = 0; smp < total; smp += bs)
     {
         buf.clear();
         midi.clear();
-        const double blockPpq = ppq0 + s * bps;
+        const double blockPpq = ppq0 + smp * bps;
         ph.ppq = blockPpq;
 
-        // ネタの音（サイドチェイン = 入力チャンネル 0/1。主入力は無効で 0ch）
+        // ネタの音（サイドチェイン = 入力チャンネル 0/1）
         for (int j = 0; j < bs; ++j)
         {
             const double ppq = blockPpq + j * bps;
-            const double t   = (s + j) / sr;
+            const double t   = (smp + j) / sr;
             const long   bar = static_cast<long> (std::floor (ppq / 4.0));
             const bool   am  = (bar % 2 == 0);
             const int ch[3] = { am ? 57 : 53, am ? 60 : 57, am ? 64 : 60 };
@@ -131,14 +124,49 @@ void runScenario (double startBar, int style, const char* name, DrumSource drumS
 
         proc.processBlock (buf, midi);
 
-        // 出力は無音であること（ベースは MIDI のみ）
-        if (s == 0)
-        {
-            float peak = 0.0f;
-            for (int c = 0; c < numOut; ++c) peak = std::max (peak, buf.getMagnitude (c, 0, bs));
-            expect (peak == 0.0f, "audio output stays silent");
-        }
+        if (smp == 0)
+            for (int c = 0; c < numOut; ++c) firstPeak = std::max (firstPeak, buf.getMagnitude (c, 0, bs));
     }
+    return firstPeak;
+}
+
+// 停止中のブロック（ソング位置 stopBar で止まっている）。notesWhileStopped を送っても
+// キック解析に混ざらないこと。
+void stoppedBlocks (KemuriBassProcessor& proc, FakePlayHead& ph, double stopBar, int blocks, int noteWhileStopped)
+{
+    juce::AudioBuffer<float> buf (std::max (2, proc.getTotalNumOutputChannels()), 512);
+    juce::MidiBuffer midi;
+    ph.playing = false;
+    ph.ppq     = stopBar * 4.0;
+    for (int i = 0; i < blocks; ++i)
+    {
+        buf.clear(); midi.clear();
+        if (noteWhileStopped >= 0 && i % 4 == 0)
+            midi.addEvent (juce::MidiMessage::noteOn (10, noteWhileStopped, static_cast<juce::uint8> (100)), 0);
+        proc.processBlock (buf, midi);
+    }
+}
+
+void runScenario (double startBar, int style, const char* name, DrumSource drumSource = DrumSource::pads)
+{
+    std::printf ("\n[%s] song starts at bar %.0f, style %d\n", name, startBar, style);
+
+    KemuriBassProcessor proc;
+    expect (proc.getBusCount (true) == 1 && ! proc.getPluginHasMainInput(),
+            "single sidechain input, exposed as VST3 aux (no main input)");
+    FakePlayHead ph;
+    proc.setPlayHead (&ph);
+
+    const double sr = 44100.0;
+    const int bs = 512;
+    proc.setRateAndBufferSizeDetails (sr, bs);
+    proc.prepareToPlay (sr, bs);
+
+    const int numIn = proc.getTotalNumInputChannels();
+    expect (numIn >= 2, "sidechain bus enabled by default (input channels = " + juce::String (numIn) + ")");
+
+    const float peak = playPass (proc, ph, startBar, 10, drumSource);
+    expect (peak == 0.0f, "audio output stays silent");   // ベースは MIDI のみ
 
     proc.requestAnalyze();
     const auto summary = proc.getAnalysisSummary();
@@ -259,6 +287,53 @@ void runMisroutedScenario()
     proc.releaseResources();
     proc.setPlayHead (nullptr);
 }
+
+// 実機の報告（2026-10-05）: 1 回 Analyze（キック OK）→ スタイルを変えて何回か Generate →
+// もう一度 Analyze すると「キック未検出: C3 の 1 音に…」。前の再生（Post FX の頃の C3）の
+// イベントが同じソング位置に残り、最後の再生でドラムが届かなかった区間でそれだけ拾っていた。
+void runReanalyzeScenario()
+{
+    std::printf ("\n[re-analyze] Post FX (C3) bars 0-10 -> Pre FX bars 10-26 Analyze -> Generate x3 -> stop, from top without drum MIDI -> Analyze\n");
+
+    KemuriBassProcessor proc;
+    FakePlayHead ph;
+    proc.setPlayHead (&ph);
+    proc.setRateAndBufferSizeDetails (44100.0, 512);
+    proc.prepareToPlay (44100.0, 512);
+
+    playPass (proc, ph, 0.0, 10, DrumSource::mergedC3);           // Post FX の頃（小節 0〜10）
+    playPass (proc, ph, 10.0, 16, DrumSource::pads);              // 再生したまま Pre FX に直す（小節 10〜26）
+    proc.requestAnalyze();
+    const auto s1 = proc.getAnalysisSummary();
+    std::printf ("  analyze 1:\n%s\n", s1.toRawUTF8());
+    const auto kickLine = juce::String::fromUTF8 ("\xE3\x82\xAD\xE3\x83\x83\xE3\x82\xAF: C1");   // キック: C1
+    expect (s1.contains (kickLine), "analyze 1: kick C1 (old C3 pass discarded)");
+
+    for (int st : { 4, 3, 2 })
+    {
+        if (auto* p = proc.getApvts().getParameter (pid::style))
+            p->setValueNotifyingHost (p->convertTo0to1 (static_cast<float> (st)));
+        proc.requestGenerate();
+    }
+
+    stoppedBlocks (proc, ph, 0.0, 40, 60);                        // 停止して頭へ。停止中に C3 が来ても無視
+    playPass (proc, ph, 0.0, 4, DrumSource::pads, false);         // 頭から 4 小節、ドラムの MIDI が届かない再生
+    proc.requestAnalyze();
+    const auto s2 = proc.getAnalysisSummary();
+    std::printf ("  analyze 2:\n%s\n", s2.toRawUTF8());
+    expect (s2.contains (kickLine), "analyze 2: keeps the previous kick C1");
+    expect (! s2.contains ("C3"), "analyze 2: no stale C3 from the Post FX pass / stopped notes");
+    expect (s2.contains (juce::String::fromUTF8 ("\xE4\xBB\x8A\xE5\x9B\x9E")), "analyze 2: says what failed this time");   // 今回
+
+    proc.requestGenerate();
+    const auto gen = proc.getGenerateSummary();
+    std::printf ("  %s\n", gen.toRawUTF8());
+    expect (gen.contains (juce::String::fromUTF8 ("\xE3\x81\x82\xE3\x81\xAA\xE3\x81\x9F\xE3\x81\xAE\xE3\x82\xAD\xE3\x83\x83\xE3\x82\xAF")),   // あなたのキック
+            "generate still syncs to your kick");
+
+    proc.releaseResources();
+    proc.setPlayHead (nullptr);
+}
 } // namespace
 
 int main()
@@ -271,6 +346,7 @@ int main()
     runScenario (0.0, 1, "Drum Rack Post FX: all pads merged on C3", DrumSource::mergedC3);
     runScenario (0.0, 1, "Drum Rack Kick Drum chain on C3", DrumSource::kickChainC3);
     runMisroutedScenario();
+    runReanalyzeScenario();
     std::printf ("\n%s (%d failures)\n", failures == 0 ? "E2E PASS" : "E2E FAILURES", failures);
     return failures == 0 ? 0 : 1;
 }

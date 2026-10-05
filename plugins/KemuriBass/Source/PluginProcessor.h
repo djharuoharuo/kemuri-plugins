@@ -115,11 +115,17 @@ private:
     std::atomic<int>                            lastNoteCount { -1 };
 
     // ── Realtime MIDI capture（解析用, R5 / R11）─────────────────────
-    struct CapturedEvent { double ppq; int pitch; bool isOn; };
+    // seg = 再生区間の番号（再生開始・位置ジャンプで進む）
+    struct CapturedEvent { double ppq; int pitch; bool isOn; std::uint32_t seg; };
     static constexpr int              kFifoCapacity = 8192;
     juce::AbstractFifo                captureFifo { kFifoCapacity };
     std::array<CapturedEvent, kFifoCapacity> captureBuffer {};
-    std::deque<CapturedEvent>         recentEvents;   // message thread only（直近64小節）
+    std::deque<CapturedEvent>         recentEvents;   // message thread only（最後の連続した再生分、最大 64 小節）
+    std::uint32_t                     recentSegment = 0;   // message thread only
+    // audio thread: MIDI の再生区間
+    std::uint32_t                     midiSegment     = 0;
+    bool                              midiCapturing   = false;
+    double                            midiExpectedPpq = 0.0;
     static constexpr double           kWindowBeats = 64.0 * 4.0;
 
     // ── v2: ネタのオーディオ（サイドチェイン）取り込み（R5 改 / R11）────
@@ -182,7 +188,8 @@ private:
     double              sampleRate   = 44100.0;
     double              internalPpq  = 0.0;
 
-    void captureIncoming (const juce::MidiBuffer& midi, double blockPpq, double beatsPerSample);
+    void captureIncoming (const juce::MidiBuffer& midi, double blockPpq, double beatsPerSample,
+                          bool isPlaying, int numSamples);
     void renderSequence (const MidiSequence& seq, juce::MidiBuffer& midi,
                          double ppqStart, double beatsPerSample, int numSamples);
     void setChoiceParam (const char* id, int index);

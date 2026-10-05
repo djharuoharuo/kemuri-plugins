@@ -1,5 +1,5 @@
 juce_add_plugin(KemuriBass
-    VERSION 2.1.0
+    VERSION 2.2.0
     COMPANY_NAME "kemuriBeat"
     BUNDLE_ID "com.kemuribeat.kemuribass"
     IS_SYNTH TRUE

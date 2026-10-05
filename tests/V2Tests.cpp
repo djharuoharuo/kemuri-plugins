@@ -233,41 +233,54 @@ int run()
     const auto Hn = makeHarmony (false);
     const auto K  = makeKick();
 
+    // Am | F の 2 小節ループ。小節 b の和音のルート、次の小節のルート
+    auto rootOf = [] (int b) { return (b % 2 == 0) ? 9 : 5; };
+    // 音の役割: その時の和音の音 / 次の小節へ食った音（小節の 3 拍目以降で次のルート）
+    auto isRootOrAnticip = [&rootOf] (const OutNote& n)
+    {
+        const int bar = static_cast<int> (std::floor (n.start / 4.0 + 1e-9));
+        const double inBar = n.start - bar * 4.0;
+        return n.pitch % 12 == rootOf (bar) || (inBar >= 3.0 && n.pitch % 12 == rootOf (bar + 1));
+    };
+    auto onAKick = [] (const OutNote& n)
+    {
+        const double inBar = n.start - std::floor (n.start / 4.0 + 1e-9) * 4.0;
+        for (double kp : { 0.0, 1.75, 2.5, 4.0 }) if (std::abs (inBar - kp) < 0.13) return true;
+        return false;
+    };
+
     for (int style : { 1, 4, 3, 2 })
     {
         std::printf ("\n=== style %d ===\n", style);
         Rng rng (1234u + style);
-        V2Config cfg; cfg.style = style; cfg.bars = 4; cfg.complexity = 30; cfg.fill = 20;
+        V2Config cfg; cfg.style = style; cfg.bars = 8; cfg.complexity = 30; cfg.fill = 20;
         cfg.harmony = &H; cfg.kick = &K;
         const auto r = buildBassV2 (cfg, rng);
-        dump (r, 4);
+        dump (r, 8);
 
-        // 1) 和音に合っている: 各音のピッチクラスがその時点の和音の構成音 or ♭7/6/経過
+        // 1) 和音に合っている: その時の和音の構成音(+♭7) か、次の和音へ食った音
         int inChord = 0, total = 0;
         for (const auto& n : r.notes)
         {
             const int bar = static_cast<int> (n.start / 4.0);
-            const bool am = (bar % 2 == 0);
-            const int pc = n.pitch % 12;
-            const std::set<int> tones = am ? std::set<int> { 9, 0, 4, 7 } : std::set<int> { 5, 9, 0, 3 };   // + ♭7
-            ++total; if (tones.count (pc)) ++inChord;
+            const std::set<int> tones = (bar % 2 == 0) ? std::set<int> { 9, 0, 4, 7 } : std::set<int> { 5, 9, 0, 3 };   // + ♭7
+            ++total; if (tones.count (n.pitch % 12) || isRootOrAnticip (n)) ++inChord;
         }
-        expect (total > 0 && inChord * 100 / total >= 75, "音の75%以上が和音構成音(+♭7)  " + std::to_string (inChord) + "/" + std::to_string (total));
+        expect (total > 0 && inChord * 100 / total >= 75, "音の75%以上が和音構成音(+♭7)か食った音  " + std::to_string (inChord) + "/" + std::to_string (total));
 
-        // 2) 各小節の 1 拍目がその小節の和音のルート（Am→A / F→F）
+        // 2) 各小節の 1 拍目で鳴っている音 = その小節の和音のルート（食ってつないだ音も含む）
         bool rootsOk = true;
         for (int b = 0; b < r.bars; ++b)
         {
+            const OutNote* sounding = nullptr;
             for (const auto& n : r.notes)
-                if (n.start >= b * 4 - 1e-6 && n.start < b * 4 + 0.15)
-                {
-                    const int want = (b % 2 == 0) ? 9 : 5;
-                    if (n.pitch % 12 != want) rootsOk = false;
-                }
+                if (n.start <= b * 4 + 0.15 && n.start + n.dur > b * 4 + 0.01 && (! sounding || n.start > sounding->start)) sounding = &n;
+            if (! sounding || sounding->pitch % 12 != rootOf (b)) rootsOk = false;
         }
-        expect (rootsOk, "各小節1拍目 = ネタの和音のルート（位相も正しい）");
+        expect (rootsOk, "各小節の1拍目に鳴っている音 = その小節の和音のルート（位相も正しい）");
 
-        // 3) キックと一緒に鳴る: キック位置（0/1.75/2.5）に打点がある割合
+        // 3) キックとの関係: キック位置（0/1.75/2.5）にベースが始まる割合
+        //    （伸ばしたまま・食ってつなぐ分は重ならない。9th は特に少ない）
         int onKick = 0, kicks = 0;
         for (int b = 0; b < 2; ++b)
             for (double kp : { 0.0, 1.75, 2.5 })
@@ -275,20 +288,20 @@ int run()
                 ++kicks;
                 for (const auto& n : r.notes) if (std::abs (n.start - (b * 4 + kp)) < 0.13) { ++onKick; break; }
             }
-        const int needPct = (style == 3) ? 50 : 80;   // 9th は 1 拍目・和音の変化・後半 1 回だけ弾き直す
+        const int needPct = (style == 3) ? 30 : (style == 1 ? 80 : 60);
         expect (onKick * 100 / kicks >= needPct, "キック位置にベース " + std::to_string (onKick) + "/" + std::to_string (kicks));
 
-        // 4) 音域 E1..G2
+        // 4) 音域
         bool reg = true; for (const auto& n : r.notes) if (n.pitch < 28 || n.pitch > 40) reg = false;
         expect (reg, "音域 E1..E2（高い音なし）");
 
-        // 5) ループが毎回同じ（フレーズ端でない bar0 と bar2）
+        // 5) ループが毎回同じ（フレーズの最後でない bar1 と bar5）
         auto barSig = [&r] (int b) { std::string s; for (const auto& n : r.notes) if (n.start >= b * 4 && n.start < b * 4 + 4) s += std::to_string (n.pitch) + "@" + std::to_string (std::lround ((n.start - b * 4) * 100)) + " "; return s; };
-        expect (barSig (0) == barSig (2), "bar0 == bar2（ループの完全反復）");
+        expect (barSig (1) == barSig (5), "bar1 == bar5（ループの完全反復）");
 
         // 6) 密度
         const double npb = static_cast<double> (r.notes.size()) / r.bars;
-        expect (npb >= 1.5 && npb <= 4.0, "密度 " + std::to_string (npb).substr (0, 4) + " 音/小節（ブームバップ 2〜4）");
+        expect (npb >= 1.0 && npb <= 4.0, "密度 " + std::to_string (npb).substr (0, 4) + " 音/小節（ブームバップ 2〜4）");
         bool perBarOk = true;
         for (int b = 0; b < r.bars; ++b)
         {
@@ -298,18 +311,49 @@ int run()
         }
         expect (perBarOk, "どの小節も 4 音まで（フレーズの最後は +1）");
 
-        // 7) Complexity 30 では、フレーズの最後以外はすべてその時の和音のルート
+        // 7) Complexity 30 では、フレーズの最後以外はルートか食った次のルートだけ
         bool allRoots = true;
         for (const auto& n : r.notes)
-        {
-            const int bar = static_cast<int> (n.start / 4.0);
-            if (bar % 4 == 3) continue;
-            if (n.pitch % 12 != ((bar % 2 == 0) ? 9 : 5)) allRoots = false;
-        }
+            if (static_cast<int> (n.start / 4.0) % 4 != 3 && ! isRootOrAnticip (n)) allRoots = false;
         expect (allRoots, "フレーズの最後以外はルートだけ（音程が跳ねない）");
+
+        // 8) Complexity 0 では全部キックの上（フレーズの最後の経過音を除く）
+        {
+            Rng rng0 (99u + style);
+            V2Config c0 = cfg; c0.complexity = 0;
+            const auto r0 = buildBassV2 (c0, rng0);
+            bool allOnKick = true;
+            for (const auto& n : r0.notes)
+            {
+                const int bar = static_cast<int> (n.start / 4.0);
+                if (bar % 4 == 3 && n.start - bar * 4.0 >= 2.9) continue;
+                if (! onAKick (n)) allOnKick = false;
+            }
+            expect (allOnKick, "Complexity 0 = 全部キックの上");
+        }
     }
 
-    // 8) サンプルにベースが無いネタでも同じ（ルートだけ）
+    // 9) キックと重ならない音: 既定（Complexity 30）で 40 回生成し、フレーズの最後以外で
+    //    キックから外れた音（キックの間・食い）が出る割合
+    std::printf ("\n=== キックと重ならない音（Complexity 30, 40 回）===\n");
+    for (int style : { 1, 4, 3, 2 })
+    {
+        int withOff = 0;
+        for (int sd = 0; sd < 40; ++sd)
+        {
+            Rng rng (static_cast<std::uint32_t> (sd) * 7919u + 11u);
+            V2Config cfg; cfg.style = style; cfg.bars = 8; cfg.complexity = 30; cfg.fill = 20;
+            cfg.harmony = &H; cfg.kick = &K;
+            const auto r = buildBassV2 (cfg, rng);
+            for (const auto& n : r.notes)
+                if (static_cast<int> (n.start / 4.0) % 4 != 3 && ! onAKick (n)) { ++withOff; break; }
+        }
+        std::printf ("  style %d: %d/40\n", style, withOff);
+        if (style == 4 || style == 2) expect (withOff >= 20, "Pete / Dilla はキックから外れる音がふつうに出る");
+        if (style == 1) expect (withOff <= 24, "Premier はほぼキックの上");
+    }
+
+    // 10) サンプルにベースが無いネタでも同じ（ルートだけ）
     std::printf ("\n=== サンプルにベースが無い場合 ===\n");
     {
         Rng rng (77u);
@@ -318,7 +362,7 @@ int run()
         dump (r, 2);
         bool ok = ! r.notes.empty();
         for (const auto& n : r.notes)
-            if (static_cast<int> (n.start / 4.0) < 3 && n.pitch % 12 != ((static_cast<int> (n.start / 4.0) % 2 == 0) ? 9 : 5)) ok = false;
+            if (static_cast<int> (n.start / 4.0) < 3 && ! isRootOrAnticip (n)) ok = false;
         expect (ok, "ベース無しのネタでも和音のルート");
     }
 

@@ -175,11 +175,19 @@ void runScenario (double startBar, int style, const char* name, DrumSource drumS
     std::printf ("  %s\n  %d notes / %.0f beats\n", proc.getGenerateSummary().toRawUTF8(), static_cast<int> (notes.size()), len);
     expect (! notes.empty() && len > 0.0, "generated");
 
-    // 小節 0 = ソング小節 ≡ 0（偶数 = Am）→ A、小節 1 → F
+    // 小節 0 = ソング小節 ≡ 0（偶数 = Am）→ A、小節 1 → F。
+    // 1 拍目に鳴っている音で見る（和音の変化を食って前の小節から伸ばしている場合がある）
     int firstPc[2] = { -1, -1 };
-    for (const auto& n : notes)
-        for (int b = 0; b < 2; ++b)
-            if (firstPc[b] < 0 && n.start >= b * 4.0 - 1e-6 && n.start < b * 4.0 + 0.2) firstPc[b] = n.pitch % 12;
+    for (int b = 0; b < 2; ++b)
+    {
+        double latest = -1e9;
+        for (const auto& n : notes)
+            if (n.start <= b * 4.0 + 0.2 && n.start + n.dur > b * 4.0 + 0.01 && n.start > latest)
+            {
+                latest = n.start;
+                firstPc[b] = n.pitch % 12;
+            }
+    }
     expect (firstPc[0] == 9, "bar0 downbeat = A (song-phase correct)");
     expect (firstPc[1] == 5, "bar1 downbeat = F");
 
@@ -187,7 +195,8 @@ void runScenario (double startBar, int style, const char* name, DrumSource drumS
     int onKick = 0;
     for (double k : { 0.0, 1.75, 2.5, 4.0, 5.75, 6.5 })
         for (const auto& n : notes) if (std::abs (n.start - k) < 0.13) { ++onKick; break; }
-    const int needKick = (style == 3) ? 4 : 5;   // 9th は 1 拍目・和音の変化・後半 1 回だけ弾き直す
+    // キックの上で伸ばす・食ってつなぐ分は重ならない（9th は 1 拍目・和音の変化・後半 1 回だけ）
+    const int needKick = (style == 3) ? 2 : (style == 1 ? 5 : 4);
     expect (onKick >= needKick, "bass locked to your kicks (" + juce::String (onKick) + "/6)");
 
     bool reg = true;
